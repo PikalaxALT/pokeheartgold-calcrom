@@ -31,19 +31,23 @@ pub fn main() {
     match args.arm9subdir {
         Some(subdir) => {
             for buildname in args.buildnames {
-                let basedir = std::format!("{}/{}", args.rootdir, subdir);
-                plan.push(build_analyzer::BuildAnalyzer {basedir: basedir, name: Some(buildname)});
+                plan.push(build_analyzer::BuildAnalyzer{
+                    basedir: std::format!("{}/{}", args.rootdir, subdir),
+                    name: Some(buildname),
+                });
             }
-        },
-        None => {},
+        }
+        None => {}
     }
 
     match args.arm7subdir {
         Some(subdir) => {
-            let basedir = std::format!("{}/{}", args.rootdir, subdir);
-            plan.push(build_analyzer::BuildAnalyzer {basedir: basedir, name: None});
-        },
-        None => {},
+            plan.push(build_analyzer::BuildAnalyzer{
+                basedir: std::format!("{}/{}", args.rootdir, subdir),
+                name: None,
+            });
+        }
+        None => {}
     }
 
     // Execute plan
