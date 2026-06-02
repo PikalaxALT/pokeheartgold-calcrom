@@ -1,7 +1,8 @@
-use elf;
+use elf::ElfBytes;
+use elf::endian::LittleEndian;
 use std::option::Option;
+use std::path::PathBuf;
 
-mod elf_file;
 mod xmap_file;
 
 pub struct Stats {
@@ -27,6 +28,7 @@ impl BuildAnalyzer {
 
         // ELF files produced by mwldarm don't capture the full path to the origin file
         let valid_extensions = ["c", "s"];
+        let mut seen_stems = std::collections::HashSet::<String>::new();
         for objfile in walkdir::WalkDir::new(build_path.clone())
             .into_iter()
             .filter_map(|e| e.ok())
@@ -44,6 +46,9 @@ impl BuildAnalyzer {
                     continue;
                 };
                 let stem = objpath.file_name().unwrap().to_str().unwrap();
+                if !seen_stems.insert(String::from(stem)) {
+                    continue;
+                }
                 let Some(xmap_stats) = xmap.get(stem) else {
                     // eprintln!("WARN: no build info for {}", stem);
                     continue;
@@ -69,12 +74,74 @@ impl BuildAnalyzer {
     fn analyze_elf_relocations(&self, stats: &mut Stats, build_path: &String) -> () {
         // Create a stream wrapping the elf file
         let elf_name = std::format!("{}/{}.elf", build_path, self.name);
-        let elf_stream = elf_file::load_elf(elf_name).unwrap();
-        assert_eq!(elf_stream.ehdr.class, elf::file::Class::ELF32);
-        assert_eq!(elf_stream.ehdr.e_machine, elf::abi::EM_ARM);
+        let elf_path = PathBuf::from(elf_name);
+        let elf_data = std::fs::read(elf_path).expect("unable to read ELF file");
+        let elf_bytes = ElfBytes::<LittleEndian>::minimal_parse(elf_data.as_slice())
+            .expect("could not parse ELF");
+        assert_eq!(elf_bytes.ehdr.class, elf::file::Class::ELF32);
+        assert_eq!(elf_bytes.ehdr.e_machine, elf::abi::EM_ARM);
 
         // Pointers analysis
-        let section_headers = elf_stream.section_headers();
+        let section_headers = elf_bytes.section_headers().expect("could not get shdr");
+        let mut program_headers = elf_bytes
+            .segments()
+            .expect("could not get phdr")
+            .into_iter()
+            .filter(|phdr| phdr.p_memsz != 0 && phdr.p_vaddr != 0)
+            .map(|phdr| {
+                let vaddr = u32::try_from(phdr.p_vaddr).unwrap();
+                let e_vaddr = vaddr + u32::try_from(phdr.p_memsz).unwrap();
+                [vaddr, e_vaddr]
+            });
+        let strtab_shdr = section_headers
+            .iter()
+            .find(|shdr| shdr.sh_type == elf::abi::SHT_STRTAB)
+            .expect("no strtab");
+        let strtab = elf_bytes
+            .section_data_as_strtab(&strtab_shdr)
+            .expect("could not get strtab");
+        let mut seen_names = std::collections::HashSet::<&str>::new();
+        for section in section_headers {
+            let section_name = strtab
+                .get(usize::try_from(section.sh_name).unwrap())
+                .expect("could not get section name");
+            if !seen_names.insert(section_name) {
+                continue;
+            }
+            let sbin_name = format!("{}/{}.sbin", build_path, section_name);
+            let sbin_path = std::path::PathBuf::from(&sbin_name);
+            if sbin_path.exists() {
+                let raw = std::fs::read(sbin_path).expect(&format!("unable to read {}", sbin_name));
+                let nbytes = raw.len();
+                assert_ne!(nbytes, 0);
+                (0..nbytes).step_by(4).for_each(|i| {
+                    if i + 4 >= nbytes {
+                        return;
+                    }
+                    let my_slice = [raw[i], raw[i + 1], raw[i + 2], raw[i + 3]];
+                    let my_word = u32::from_le_bytes(my_slice);
+                    if my_word >= 0x01000000
+                        && program_headers
+                            .find(|region| region[0] <= my_word && my_word < region[1])
+                            .is_some()
+                    {
+                        stats.hardcoded_pointers += 1;
+                    }
+                });
+            } else if section.sh_type == elf::abi::SHT_REL {
+                let rels = elf_bytes
+                    .section_data_as_rels(&section)
+                    .expect("reltab parse failure");
+                let nrels: u32 = rels.count().try_into().unwrap();
+                stats.resolved_pointers += nrels;
+            } else if section.sh_type == elf::abi::SHT_RELA {
+                let rels = elf_bytes
+                    .section_data_as_relas(&section)
+                    .expect("reltab parse failure");
+                let nrels: u32 = rels.count().try_into().unwrap();
+                stats.resolved_pointers += nrels;
+            }
+        }
     }
 
     pub fn process(&self) -> Stats {

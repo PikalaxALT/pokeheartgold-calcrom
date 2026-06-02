@@ -30,9 +30,19 @@ fn report(good_ct: &u32, bad_ct: &u32, total_label: &str, good_label: &str, bad_
         let total_d: f64 = total.into();
         let good_d: f64 = (*good_ct).into();
         let bad_d: f64 = (*bad_ct).into();
-            println!("    {} {} ({:.2}%)", good_ct, good_label, good_d / total_d * 100.0);
-            println!("    {} {} ({:.2}%)", bad_ct, bad_label, bad_d / total_d * 100.0);
-            println!("");
+        println!(
+            "    {} {} ({:.2}%)",
+            good_ct,
+            good_label,
+            good_d / total_d * 100.0
+        );
+        println!(
+            "    {} {} ({:.2}%)",
+            bad_ct,
+            bad_label,
+            bad_d / total_d * 100.0
+        );
+        println!("");
     }
 }
 
@@ -44,7 +54,7 @@ pub fn main() {
     match args.arm9subdir {
         Some(subdir) => {
             for buildname in args.buildnames {
-                plan.push(build_analyzer::BuildAnalyzer{
+                plan.push(build_analyzer::BuildAnalyzer {
                     basedir: std::format!("{}/{}", args.rootdir, subdir),
                     buildname: Some(buildname),
                     name: "main".to_string(),
@@ -56,7 +66,7 @@ pub fn main() {
 
     match args.arm7subdir {
         Some(subdir) => {
-            plan.push(build_analyzer::BuildAnalyzer{
+            plan.push(build_analyzer::BuildAnalyzer {
                 basedir: std::format!("{}/{}", args.rootdir, subdir),
                 buildname: None,
                 name: "ichneumon_sub".to_string(),
@@ -68,9 +78,33 @@ pub fn main() {
     // Execute plan
     for subdir in plan {
         let stats = subdir.process();
-        println!("Analysis of {} binary:", subdir.buildname.or(Some(subdir.name)).expect("must have a name"));
-        report(&stats.c_code_bytes, &stats.asm_code_bytes, "total bytes of code", "bytes of code in src", "bytes of code in asm");
-        report(&stats.c_data_bytes, &stats.asm_data_bytes, "total bytes of data", "bytes of data in src", "bytes of data in asm");
-        report(&stats.resolved_pointers, &stats.hardcoded_pointers, "total pointers", "properly-linked pointers", "hard-coded pointers");
-    };
+        println!(
+            "Analysis of {} binary:",
+            subdir
+                .buildname
+                .or(Some(subdir.name))
+                .expect("must have a name")
+        );
+        report(
+            &stats.c_code_bytes,
+            &stats.asm_code_bytes,
+            "total bytes of code",
+            "bytes of code in src",
+            "bytes of code in asm",
+        );
+        report(
+            &stats.c_data_bytes,
+            &stats.asm_data_bytes,
+            "total bytes of data",
+            "bytes of data in src",
+            "bytes of data in asm",
+        );
+        report(
+            &stats.resolved_pointers,
+            &stats.hardcoded_pointers,
+            "total pointers",
+            "properly-linked pointers",
+            "hard-coded pointers",
+        );
+    }
 }
