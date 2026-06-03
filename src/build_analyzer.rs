@@ -50,7 +50,6 @@ impl BuildAnalyzer {
                     continue;
                 }
                 let Some(xmap_stats) = xmap.get(stem) else {
-                    // eprintln!("WARN: no build info for {}", stem);
                     continue;
                 };
 
@@ -78,28 +77,37 @@ impl BuildAnalyzer {
         let elf_data = std::fs::read(elf_path).expect("unable to read ELF file");
         let elf_bytes = ElfBytes::<LittleEndian>::minimal_parse(elf_data.as_slice())
             .expect("could not parse ELF");
-        assert_eq!(elf_bytes.ehdr.class, elf::file::Class::ELF32);
-        assert_eq!(elf_bytes.ehdr.e_machine, elf::abi::EM_ARM);
+        assert_eq!(
+            elf_bytes.ehdr.class,
+            elf::file::Class::ELF32,
+            "not a 32-bit ELF"
+        );
+        assert_eq!(
+            elf_bytes.ehdr.e_machine,
+            elf::abi::EM_ARM,
+            "not an ARM32 ELF"
+        );
 
         // Pointers analysis
-        let section_headers = elf_bytes.section_headers().expect("could not get shdr");
+        // Get the program headers for the load offsets and sizes
+        // Get the section headers and strtab to find the code/data in the final ROM
         let mut program_headers = elf_bytes
             .segments()
             .expect("could not get phdr")
             .into_iter()
-            .filter(|phdr| phdr.p_memsz != 0 && phdr.p_vaddr != 0)
+            .filter(|phdr| phdr.p_memsz != 0 && (phdr.p_memsz & 3) == 0 && phdr.p_vaddr != 0)
             .map(|phdr| {
                 let vaddr = u32::try_from(phdr.p_vaddr).unwrap();
                 let e_vaddr = vaddr + u32::try_from(phdr.p_memsz).unwrap();
                 [vaddr, e_vaddr]
             });
-        let strtab_shdr = section_headers
-            .iter()
-            .find(|shdr| shdr.sh_type == elf::abi::SHT_STRTAB)
-            .expect("no strtab");
-        let strtab = elf_bytes
-            .section_data_as_strtab(&strtab_shdr)
-            .expect("could not get strtab");
+        let (section_headers_o, strtab_o) = elf_bytes
+            .section_headers_with_strtab()
+            .expect("could not get shdr and/or strtab");
+        let section_headers = section_headers_o.expect("could not get shdr");
+        let strtab = strtab_o.expect("could not get strtab");
+
+        // Only process each SBIN once per section
         let mut seen_names = std::collections::HashSet::<&str>::new();
         for section in section_headers {
             let section_name = strtab
@@ -113,21 +121,29 @@ impl BuildAnalyzer {
             if sbin_path.exists() {
                 let raw = std::fs::read(sbin_path).expect(&format!("unable to read {}", sbin_name));
                 let nbytes = raw.len();
-                assert_ne!(nbytes, 0);
-                (0..nbytes).step_by(4).for_each(|i| {
-                    if i + 4 >= nbytes {
-                        return;
-                    }
-                    let my_slice = [raw[i], raw[i + 1], raw[i + 2], raw[i + 3]];
-                    let my_word = u32::from_le_bytes(my_slice);
-                    if my_word >= 0x01000000
-                        && program_headers
-                            .find(|region| region[0] <= my_word && my_word < region[1])
-                            .is_some()
-                    {
-                        stats.hardcoded_pointers += 1;
-                    }
-                });
+                assert_ne!(nbytes, 0, "file size is 0");
+                if (nbytes & 3) != 0 {
+                    // eprintln!(
+                    //     "Skipping section {} because its size is not word-aligned",
+                    //     section_name
+                    // );
+                    continue;
+                }
+
+                // Loop over 32-bit words
+                let (chunks, _remainder) = raw.as_chunks::<4>();
+                stats.hardcoded_pointers = chunks
+                    .iter()
+                    .filter(|word_raw: &&[u8; 4]| {
+                        let my_word = u32::from_le_bytes(**word_raw);
+                        my_word >= 0x01000000
+                            && program_headers
+                                .find(|region| region[0] <= my_word && my_word < region[1])
+                                .is_some()
+                    })
+                    .count()
+                    .try_into()
+                    .unwrap();
             } else if section.sh_type == elf::abi::SHT_REL {
                 let rels = elf_bytes
                     .section_data_as_rels(&section)
