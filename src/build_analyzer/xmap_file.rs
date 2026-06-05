@@ -7,9 +7,12 @@ pub struct SingleFileStats {
     pub is_asm: bool,
 }
 
-pub fn parse_xmap(path: &String) -> HashMap<String, SingleFileStats> {
+pub fn parse_xmap(
+    path: &String,
+    source_map: &HashMap<String, bool>,
+) -> HashMap<String, SingleFileStats> {
     let mut result = HashMap::<String, SingleFileStats>::new();
-    let pat = Regex::new(r"^*(?<addr>[0-9A-F]{8})\s+(?<size>[0-9A-F]{8})\s+(?<section>\S+)\s+(?<name>\S+)\t\((?<ofile>\S+\.o)\)$").unwrap();
+    let pat = Regex::new(r"^\s*(?<addr>[0-9A-F]{8})\s+(?<size>[0-9A-F]{8})\s+(?<section>\S+)\s+(?<name>\S+)\t\((?<ofile>\S+)\.o\)$").unwrap();
     let text_sections = [".text", ".init", ".itcm"];
     let data_sections = [".data", ".rodata", ".sdata", ".dtcm"];
 
@@ -25,25 +28,23 @@ pub fn parse_xmap(path: &String) -> HashMap<String, SingleFileStats> {
             if size == 0 {
                 return;
             }
-            let name = &caps["ofile"];
-            if result.get(name).is_none() {
+            let name = String::from(&caps["ofile"]);
+            let Some(is_cfile) = source_map.get(&name) else {
+                return;
+            };
+            if result.get(&name).is_none() {
                 result.insert(
                     name.to_string(),
                     SingleFileStats {
                         code_bytes: 0,
                         data_bytes: 0,
-                        is_asm: false,
+                        is_asm: !*is_cfile,
                     },
                 );
             }
-            let cur_result = result.get_mut(name).unwrap();
+            let cur_result = result.get_mut(&name).unwrap();
             let is_text = text_sections.contains(&&caps["section"]);
             let is_data = data_sections.contains(&&caps["section"]);
-            if !cur_result.is_asm && caps["name"] == caps["section"] {
-                cur_result.code_bytes = 0;
-                cur_result.data_bytes = 0;
-                cur_result.is_asm = true;
-            }
             let ref_cur_bytes: &mut u32;
             if is_text {
                 ref_cur_bytes = &mut cur_result.code_bytes;

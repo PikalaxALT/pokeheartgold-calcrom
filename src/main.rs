@@ -1,7 +1,10 @@
 use clap::Parser;
 use std::option::Option;
 use std::vec::Vec;
+
+use crate::build_analyzer::Stats;
 mod build_analyzer;
+mod source_mapper;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -49,42 +52,46 @@ fn report(good_ct: &u32, bad_ct: &u32, total_label: &str, good_label: &str, bad_
 pub fn main() {
     let args = Args::parse();
 
+    let mut results = Vec::<(String, Stats)>::new();
+
+    let name_main = "main";
+    let name_sub = "ichneumon_sub";
+
     // Build evaluation plan
-    let mut plan = Vec::new();
-    match args.arm9subdir {
-        Some(subdir) => {
+    let arm9_basedir = args
+        .arm9subdir
+        .and_then(|subdir| std::format!("{}/{}", args.rootdir, subdir).into());
+    let arm7_basedir = args
+        .arm7subdir
+        .and_then(|subdir| std::format!("{}/{}", args.rootdir, subdir).into());
+    match arm9_basedir {
+        Some(ref basedir) => {
+            let source_map = source_mapper::get_source_files(basedir, name_main).unwrap();
             for buildname in args.buildnames {
-                plan.push(build_analyzer::BuildAnalyzer {
-                    basedir: std::format!("{}/{}", args.rootdir, subdir),
-                    buildname: Some(buildname),
-                    name: "main".to_string(),
-                });
+                let stats = build_analyzer::analyze_build(
+                    basedir,
+                    Some(&buildname),
+                    name_main,
+                    &source_map,
+                );
+                results.push((buildname.clone(), stats));
             }
         }
         None => {}
     }
 
-    match args.arm7subdir {
-        Some(subdir) => {
-            plan.push(build_analyzer::BuildAnalyzer {
-                basedir: std::format!("{}/{}", args.rootdir, subdir),
-                buildname: None,
-                name: "ichneumon_sub".to_string(),
-            });
+    match arm7_basedir {
+        Some(ref basedir) => {
+            let source_map = source_mapper::get_source_files(basedir, name_sub).unwrap();
+            let stats = build_analyzer::analyze_build(basedir, None, name_sub, &source_map);
+            results.push((name_sub.into(), stats));
         }
         None => {}
     }
 
     // Execute plan
-    for subdir in plan {
-        let stats = subdir.process();
-        println!(
-            "Analysis of {} binary:",
-            subdir
-                .buildname
-                .or(Some(subdir.name))
-                .expect("must have a name")
-        );
+    for (buildname, stats) in results {
+        println!("Analysis of {} binary:", buildname);
         report(
             &stats.c_code_bytes,
             &stats.asm_code_bytes,
