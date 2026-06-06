@@ -34,7 +34,6 @@ fn analyze_source_files(stats: &mut Stats, xmap: &HashMap<String, SingleFileStat
             num_bytes_data = &mut stats.c_data_bytes;
         }
 
-        // find .text section corresponding to
         *num_bytes_code += xmap_stats.code_bytes;
         *num_bytes_data += xmap_stats.data_bytes;
     }
