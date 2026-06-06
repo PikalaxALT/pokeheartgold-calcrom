@@ -146,7 +146,7 @@ pub fn analyze_build(
 
     let build_subdir: String;
     match buildname {
-        Some(ref my_name) => {
+        Some(my_name) => {
             build_subdir = std::format!("build/{}", my_name);
         }
         None => {
