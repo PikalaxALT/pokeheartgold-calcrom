@@ -124,32 +124,34 @@ pub fn analyze_build(
             .symbols
             .iter()
             .filter(|nsym| nsym.sym.st_size != 0)
-            .for_each(|nsym| {
-                if nsym.sym.st_size != 0 {
-                    match xmapped_syms.get(&nsym.name) {
-                        Some(sym) => {
-                            let counter = match (*is_cfile, sym.is_code) {
-                                (true, true) => &mut stats.c_code_bytes,
-                                (true, false) => &mut stats.c_data_bytes,
-                                (false, true) => &mut stats.asm_code_bytes,
-                                (false, false) => &mut stats.asm_data_bytes,
-                            };
-                            if *is_cfile || sym.section_name == nsym.name {
-                                *counter += sym.size;
-                                let sym_data = ofile_elf
-                                    .symbol_data(nsym)
-                                    .expect("failed to parse sym data");
-                                stats.hardcoded_pointers += count_hardcoded_pointers(
-                                    &sym_data,
-                                    nsym.sym.st_value,
-                                    &elf_file,
-                                    &elf_segment_bounds,
-                                );
-                            }
-                        }
-                        None => (),
-                    };
+            .map(|nsym| (nsym, xmapped_syms.get(&nsym.name)))
+            .filter_map(|(nsym, xsym)| match xsym {
+                Some(rxsym) => {
+                    if *is_cfile || rxsym.section_name == nsym.name {
+                        Some((nsym, rxsym))
+                    } else {
+                        None
+                    }
                 }
+                None => None,
+            })
+            .for_each(|(nsym, sym)| {
+                let counter = match (*is_cfile, sym.is_code) {
+                    (true, true) => &mut stats.c_code_bytes,
+                    (true, false) => &mut stats.c_data_bytes,
+                    (false, true) => &mut stats.asm_code_bytes,
+                    (false, false) => &mut stats.asm_data_bytes,
+                };
+                *counter += sym.size;
+                let sym_data = ofile_elf
+                    .symbol_data(nsym)
+                    .expect("failed to parse sym data");
+                stats.hardcoded_pointers += count_hardcoded_pointers(
+                    &sym_data,
+                    nsym.sym.st_value,
+                    &elf_file,
+                    &elf_segment_bounds,
+                );
             });
     });
 
