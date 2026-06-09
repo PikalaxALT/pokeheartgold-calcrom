@@ -126,10 +126,7 @@ pub fn analyze_build(
             .filter(|nsym| nsym.sym.st_size != 0)
             .for_each(|nsym| {
                 if nsym.sym.st_size != 0 {
-                    match xmapped_syms
-                        .iter()
-                        .find(|xmsym| xmsym.symbol_name == nsym.name)
-                    {
+                    match xmapped_syms.get(&nsym.name) {
                         Some(sym) => {
                             let counter = match (*is_cfile, sym.is_code) {
                                 (true, true) => &mut stats.c_code_bytes,
@@ -137,7 +134,7 @@ pub fn analyze_build(
                                 (false, true) => &mut stats.asm_code_bytes,
                                 (false, false) => &mut stats.asm_data_bytes,
                             };
-                            if *is_cfile || sym.section_name == sym.symbol_name {
+                            if *is_cfile || sym.section_name == nsym.name {
                                 *counter += sym.size;
                                 let sym_data = ofile_elf
                                     .symbol_data(nsym)

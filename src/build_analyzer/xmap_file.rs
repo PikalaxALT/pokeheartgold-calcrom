@@ -20,7 +20,6 @@ fn is_section_code(name: &str) -> Option<bool> {
 }
 
 pub struct XmapSymbol {
-    pub symbol_name: String,
     pub section_name: String,
     pub is_code: bool,
     pub size: usize,
@@ -30,8 +29,8 @@ pub struct XmapSymbol {
 pub fn parse_xmap(
     path: &String,
     source_map: &HashMap<String, (String, bool)>,
-) -> HashMap<(String, bool), Vec<XmapSymbol>> {
-    let mut result = HashMap::<(String, bool), Vec<XmapSymbol>>::new();
+) -> HashMap<(String, bool), HashMap<String, XmapSymbol>> {
+    let mut result = HashMap::<(String, bool), HashMap<String, XmapSymbol>>::new();
     let pat = Regex::new(r"^\s*(?<addr>[0-9A-F]{8})\s+(?<size>[0-9A-F]{8})\s+(?<section>\S+)\s+(?<name>\S+)\t\((?<ofile>\S+)\.o\)$").unwrap();
 
     std::fs::read_to_string(path)
@@ -66,17 +65,23 @@ pub fn parse_xmap(
             let cur_result = match result.get_mut(&key) {
                 Some(vec) => vec,
                 None => {
-                    result.insert(key.clone(), Vec::<XmapSymbol>::new());
+                    result.insert(key.clone(), HashMap::<String, XmapSymbol>::new());
                     result.get_mut(&key).unwrap()
                 }
             };
 
-            cur_result.push(XmapSymbol {
-                symbol_name: caps["name"].to_string(),
-                section_name: caps["section"].to_string(),
-                is_code: is_text,
-                size: size,
-            });
+            assert!(
+                cur_result
+                    .insert(
+                        caps["name"].to_string(),
+                        XmapSymbol {
+                            section_name: caps["section"].to_string(),
+                            is_code: is_text,
+                            size: size,
+                        },
+                    )
+                    .is_none()
+            );
         });
 
     result
