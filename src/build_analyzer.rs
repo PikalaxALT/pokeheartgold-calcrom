@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::option::Option;
 use std::path::PathBuf;
 
-use crate::build_analyzer::elf_file::ElfFile;
+use crate::build_analyzer::elf_file::{ElfFile, NamedSymbol};
 
 mod elf_file;
 mod xmap_file;
@@ -36,11 +36,12 @@ fn segments_to_ranges(program_headers: &Vec<ProgramHeader>) -> Vec<(u64, u64)> {
 }
 
 fn count_hardcoded_pointers(
-    raw_data: &Vec<u8>,
-    sh_addr: u64,
-    final_elf: &ElfFile,
+    sym: &NamedSymbol,
+    elf: &ElfFile,
     phdr_ranges: &Vec<(u64, u64)>,
 ) -> usize {
+    let raw_data = elf.symbol_data(sym).expect("failed to parse sym data");
+    let sh_addr = sym.sym.st_value;
     // Loop over 32-bit words
     raw_data
         .as_chunks::<4>()
@@ -54,20 +55,13 @@ fn count_hardcoded_pointers(
             )
         })
         .filter(|(addr, my_word)| {
-            phdr_ranges
-                .iter()
-                .find(|region| region.0 <= *my_word && *my_word < region.1)
-                .is_some()
-                && final_elf
-                    .rels
+            *my_word >= 0x01000000
+                && phdr_ranges
                     .iter()
-                    .find(|rel| rel.r_offset == *addr)
-                    .is_none()
-                && final_elf
-                    .relas
-                    .iter()
-                    .find(|rel| rel.r_offset == *addr)
-                    .is_none()
+                    .find(|region| region.0 <= *my_word && *my_word < region.1)
+                    .is_some()
+                && elf.rels.iter().find(|rel| rel.r_offset == *addr).is_none()
+                && elf.relas.iter().find(|rel| rel.r_offset == *addr).is_none()
         })
         .count()
 }
@@ -143,15 +137,8 @@ pub fn analyze_build(
                     (false, false) => &mut stats.asm_data_bytes,
                 };
                 *counter += sym.size;
-                let sym_data = ofile_elf
-                    .symbol_data(nsym)
-                    .expect("failed to parse sym data");
-                stats.hardcoded_pointers += count_hardcoded_pointers(
-                    &sym_data,
-                    nsym.sym.st_value,
-                    &elf_file,
-                    &elf_segment_bounds,
-                );
+                stats.hardcoded_pointers +=
+                    count_hardcoded_pointers(&nsym, &ofile_elf, &elf_segment_bounds);
             });
     });
 
