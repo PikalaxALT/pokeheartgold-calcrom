@@ -26,13 +26,19 @@ struct Args {
     buildnames: Vec<String>,
 }
 
-fn report(good_ct: &u32, bad_ct: &u32, total_label: &str, good_label: &str, bad_label: &str) -> () {
+fn report(
+    good_ct: usize,
+    bad_ct: usize,
+    total_label: &str,
+    good_label: &str,
+    bad_label: &str,
+) -> () {
     let total = good_ct + bad_ct;
     println!("  {} {}", total, total_label);
     if total != 0 {
-        let total_d: f64 = total.into();
-        let good_d: f64 = (*good_ct).into();
-        let bad_d: f64 = (*bad_ct).into();
+        let total_d = total as f64;
+        let good_d = good_ct as f64;
+        let bad_d = bad_ct as f64;
         println!(
             "    {} {} ({:.2}%)",
             good_ct,
@@ -67,7 +73,7 @@ pub fn main() {
     match arm9_basedir {
         Some(ref basedir) => {
             let source_map = source_mapper::get_source_files(basedir, name_main).unwrap();
-            for buildname in args.buildnames {
+            args.buildnames.into_iter().for_each(|buildname| {
                 let stats = build_analyzer::analyze_build(
                     basedir,
                     Some(&buildname),
@@ -75,7 +81,7 @@ pub fn main() {
                     &source_map,
                 );
                 results.push((buildname.clone(), stats));
-            }
+            });
         }
         None => {}
     }
@@ -84,34 +90,34 @@ pub fn main() {
         Some(ref basedir) => {
             let source_map = source_mapper::get_source_files(basedir, name_sub).unwrap();
             let stats = build_analyzer::analyze_build(basedir, None, name_sub, &source_map);
-            results.push((name_sub.into(), stats));
+            results.push((name_sub.to_string(), stats));
         }
         None => {}
     }
 
     // Execute plan
-    for (buildname, stats) in results {
+    results.into_iter().for_each(|(buildname, stats)| {
         println!("Analysis of {} binary:", buildname);
         report(
-            &stats.c_code_bytes,
-            &stats.asm_code_bytes,
+            stats.c_code_bytes,
+            stats.asm_code_bytes,
             "total bytes of code",
             "bytes of code in src",
             "bytes of code in asm",
         );
         report(
-            &stats.c_data_bytes,
-            &stats.asm_data_bytes,
+            stats.c_data_bytes,
+            stats.asm_data_bytes,
             "total bytes of data",
             "bytes of data in src",
             "bytes of data in asm",
         );
         report(
-            &stats.resolved_pointers,
-            &stats.hardcoded_pointers,
+            stats.resolved_pointers,
+            stats.hardcoded_pointers,
             "total pointers",
             "properly-linked pointers",
             "hard-coded pointers",
         );
-    }
+    });
 }

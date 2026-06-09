@@ -1,139 +1,82 @@
-use elf::ElfBytes;
-use elf::endian::LittleEndian;
+use elf::segment::ProgramHeader;
 use std::collections::HashMap;
 use std::option::Option;
 use std::path::PathBuf;
 
-use crate::build_analyzer::xmap_file::SingleFileStats;
+use crate::build_analyzer::elf_file::ElfFile;
 
+mod elf_file;
 mod xmap_file;
 
+/// Collects statistics about the decompilation effort based on the build outputs
 pub struct Stats {
-    pub c_code_bytes: u32,
-    pub c_data_bytes: u32,
-    pub asm_code_bytes: u32,
-    pub asm_data_bytes: u32,
-    pub resolved_pointers: u32,
-    pub hardcoded_pointers: u32,
+    pub c_code_bytes: usize,
+    pub c_data_bytes: usize,
+    pub asm_code_bytes: usize,
+    pub asm_data_bytes: usize,
+    pub resolved_pointers: usize,
+    pub hardcoded_pointers: usize,
 }
 
-fn analyze_source_files(stats: &mut Stats, xmap: &HashMap<String, SingleFileStats>) -> () {
-    let mut seen_stems = std::collections::HashSet::<String>::new();
-    for (stem, xmap_stats) in xmap.iter() {
-        if !seen_stems.insert(String::from(stem)) {
-            continue;
-        }
-
-        let num_bytes_data: &mut u32;
-        let num_bytes_code: &mut u32;
-        if xmap_stats.is_asm {
-            num_bytes_code = &mut stats.asm_code_bytes;
-            num_bytes_data = &mut stats.asm_data_bytes;
+fn segments_to_ranges(program_headers: &Vec<ProgramHeader>) -> Vec<(u64, u64)> {
+    let mut phdr_sorted = program_headers
+        .iter()
+        .map(|phdr| (phdr.p_vaddr, phdr.p_vaddr + phdr.p_memsz))
+        .collect::<Vec<_>>();
+    phdr_sorted.sort();
+    let mut phdr_ranges = Vec::<(u64, u64)>::new();
+    phdr_sorted.into_iter().for_each(|(start, end)| {
+        if phdr_ranges.is_empty() || phdr_ranges.last_mut().unwrap().1 <= start {
+            phdr_ranges.push((start, end));
         } else {
-            num_bytes_code = &mut stats.c_code_bytes;
-            num_bytes_data = &mut stats.c_data_bytes;
+            phdr_ranges.last_mut().unwrap().1 = end;
         }
-
-        *num_bytes_code += xmap_stats.code_bytes;
-        *num_bytes_data += xmap_stats.data_bytes;
-    }
+    });
+    phdr_ranges
 }
 
-fn analyze_elf_relocations(stats: &mut Stats, build_path: &String, name: &str) -> () {
-    // Create a stream wrapping the elf file
-    let elf_name = std::format!("{}/{}.elf", build_path, name);
-    let elf_path = PathBuf::from(elf_name);
-    let elf_data = std::fs::read(elf_path).expect("unable to read ELF file");
-    let elf_bytes =
-        ElfBytes::<LittleEndian>::minimal_parse(elf_data.as_slice()).expect("could not parse ELF");
-    assert_eq!(
-        elf_bytes.ehdr.class,
-        elf::file::Class::ELF32,
-        "not a 32-bit ELF"
-    );
-    assert_eq!(
-        elf_bytes.ehdr.e_machine,
-        elf::abi::EM_ARM,
-        "not an ARM32 ELF"
-    );
-
-    // Pointers analysis
-    // Get the program headers for the load offsets and sizes
-    // Get the section headers and strtab to find the code/data in the final ROM
-    let mut program_headers = elf_bytes
-        .segments()
-        .expect("could not get phdr")
-        .into_iter()
-        .filter(|phdr| phdr.p_memsz != 0 && (phdr.p_memsz & 3) == 0 && phdr.p_vaddr != 0)
-        .map(|phdr| {
-            let vaddr = u32::try_from(phdr.p_vaddr).unwrap();
-            let e_vaddr = vaddr + u32::try_from(phdr.p_memsz).unwrap();
-            [vaddr, e_vaddr]
-        });
-    let (section_headers_o, strtab_o) = elf_bytes
-        .section_headers_with_strtab()
-        .expect("could not get shdr and/or strtab");
-    let section_headers = section_headers_o.expect("could not get shdr");
-    let strtab = strtab_o.expect("could not get strtab");
-
-    // Only process each SBIN once per section
-    let mut seen_names = std::collections::HashSet::<&str>::new();
-    for section in section_headers {
-        let section_name = strtab
-            .get(usize::try_from(section.sh_name).unwrap())
-            .expect("could not get section name");
-        if !seen_names.insert(section_name) {
-            continue;
-        }
-        let sbin_name = format!("{}/{}.sbin", build_path, section_name);
-        let sbin_path = std::path::PathBuf::from(&sbin_name);
-        if sbin_path.exists() {
-            let raw = std::fs::read(sbin_path).expect(&format!("unable to read {}", sbin_name));
-            let nbytes = raw.len();
-            assert_ne!(nbytes, 0, "file size is 0");
-            if (nbytes & 3) != 0 {
-                // eprintln!(
-                //     "Skipping section {} because its size is not word-aligned",
-                //     section_name
-                // );
-                continue;
-            }
-
-            // Loop over 32-bit words
-            let (chunks, _remainder) = raw.as_chunks::<4>();
-            stats.hardcoded_pointers = chunks
+fn count_hardcoded_pointers(
+    raw_data: &Vec<u8>,
+    sh_addr: u64,
+    final_elf: &ElfFile,
+    phdr_ranges: &Vec<(u64, u64)>,
+) -> usize {
+    // Loop over 32-bit words
+    raw_data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .enumerate()
+        .map(|(idx, word_raw)| {
+            (
+                sh_addr + u64::try_from(4 * idx).unwrap(),
+                u64::from(u32::from_le_bytes(*word_raw)),
+            )
+        })
+        .filter(|(addr, my_word)| {
+            phdr_ranges
                 .iter()
-                .filter(|word_raw: &&[u8; 4]| {
-                    let my_word = u32::from_le_bytes(**word_raw);
-                    my_word >= 0x01000000
-                        && program_headers
-                            .find(|region| region[0] <= my_word && my_word < region[1])
-                            .is_some()
-                })
-                .count()
-                .try_into()
-                .unwrap();
-        } else if section.sh_type == elf::abi::SHT_REL {
-            let rels = elf_bytes
-                .section_data_as_rels(&section)
-                .expect("reltab parse failure");
-            let nrels: u32 = rels.count().try_into().unwrap();
-            stats.resolved_pointers += nrels;
-        } else if section.sh_type == elf::abi::SHT_RELA {
-            let rels = elf_bytes
-                .section_data_as_relas(&section)
-                .expect("reltab parse failure");
-            let nrels: u32 = rels.count().try_into().unwrap();
-            stats.resolved_pointers += nrels;
-        }
-    }
+                .find(|region| region.0 <= *my_word && *my_word < region.1)
+                .is_some()
+                && final_elf
+                    .rels
+                    .iter()
+                    .find(|rel| rel.r_offset == *addr)
+                    .is_none()
+                && final_elf
+                    .relas
+                    .iter()
+                    .find(|rel| rel.r_offset == *addr)
+                    .is_none()
+        })
+        .count()
 }
 
 pub fn analyze_build(
     basedir: &String,
     buildname: Option<&String>,
     name: &str,
-    source_map: &HashMap<String, bool>,
+    source_map: &HashMap<String, (String, bool)>,
 ) -> Stats {
     let mut stats = Stats {
         c_code_bytes: 0,
@@ -150,7 +93,7 @@ pub fn analyze_build(
             build_subdir = std::format!("build/{}", my_name);
         }
         None => {
-            build_subdir = "build".to_string();
+            build_subdir = String::from("build");
         }
     }
     let build_path = std::format!("{}/{}", basedir, build_subdir);
@@ -159,8 +102,59 @@ pub fn analyze_build(
     let xmap_name = std::format!("{}/{}.elf.xMAP", build_path, name);
     let xmap = xmap_file::parse_xmap(&xmap_name, source_map);
 
-    analyze_source_files(&mut stats, &xmap);
-    analyze_elf_relocations(&mut stats, &build_path, name);
+    // Read the ELF file into memory and make sure it does in fact represent an NDS binary
+    let elf_name = std::format!("{}/{}.elf", build_path, name);
+    let elf_file = ElfFile::from_path(&elf_name);
+    let elf_segment_bounds = segments_to_ranges(&elf_file.segments);
+    source_map.iter().for_each(|(_stem, (subpath, is_cfile))| {
+        let ofile_path = format!("{}/{}.o", build_path, subpath);
+        let ofile_pathbuf = PathBuf::from(&ofile_path);
+        if !ofile_pathbuf.exists() {
+            eprintln!("no such file or directory: {}", ofile_path);
+            return;
+        }
+        let ofile_elf = ElfFile::from_path(&ofile_path);
+        stats.resolved_pointers += ofile_elf.rels.len() + ofile_elf.relas.len();
+        let Some(xmapped_syms) = xmap.get(&(subpath.clone(), *is_cfile)) else {
+            return;
+        };
+
+        // Select syms that appear in the xmap file
+        ofile_elf
+            .symbols
+            .iter()
+            .filter(|nsym| nsym.sym.st_size != 0)
+            .for_each(|nsym| {
+                if nsym.sym.st_size != 0 {
+                    match xmapped_syms
+                        .iter()
+                        .find(|xmsym| xmsym.symbol_name == nsym.name)
+                    {
+                        Some(sym) => {
+                            let counter = match (*is_cfile, sym.is_code) {
+                                (true, true) => &mut stats.c_code_bytes,
+                                (true, false) => &mut stats.c_data_bytes,
+                                (false, true) => &mut stats.asm_code_bytes,
+                                (false, false) => &mut stats.asm_data_bytes,
+                            };
+                            if *is_cfile || sym.section_name == sym.symbol_name {
+                                *counter += sym.size;
+                                let sym_data = ofile_elf
+                                    .symbol_data(nsym)
+                                    .expect("failed to parse sym data");
+                                stats.hardcoded_pointers += count_hardcoded_pointers(
+                                    &sym_data,
+                                    nsym.sym.st_value,
+                                    &elf_file,
+                                    &elf_segment_bounds,
+                                );
+                            }
+                        }
+                        None => (),
+                    };
+                }
+            });
+    });
 
     stats
 }

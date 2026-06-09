@@ -29,30 +29,32 @@ impl core::fmt::Display for SourceMapperError {
 pub fn get_source_files(
     dir: &String,
     linkname: &'static str,
-) -> Result<HashMap<String, bool>, SourceMapperError> {
+) -> Result<HashMap<String, (String, bool)>, SourceMapperError> {
     let re = Regex::new(r"^\s*Object\s+(\S+)\.o").unwrap();
-    let mut name_map = HashMap::<String, bool>::new();
+    let mut name_map = HashMap::<String, (String, bool)>::new();
     let lsf_file = format!("{}/{}.lsf", dir, linkname);
-    for line in std::fs::read_to_string(&lsf_file)
+    std::fs::read_to_string(&lsf_file)
         .expect(&format!("no such file or directory: {}", lsf_file))
         .lines()
         .map(String::from)
-    {
-        let Some(m) = re.captures(&line) else {
-            continue;
-        };
-        let source_o_path = format!("{}/{}", dir, &m[1]);
-        let stem = String::from(source_o_path.rsplit_once("/").unwrap().1);
-        let is_cfile = std::path::PathBuf::from(format!("{}.c", source_o_path)).exists();
-        let is_sfile = std::path::PathBuf::from(format!("{}.s", source_o_path)).exists();
-        if is_cfile && is_sfile {
-            return Err(SourceMapperError::CollisionError(stem));
-        }
-        if name_map.get(&stem).is_some_and(|s| *s != is_cfile) {
-            return Err(SourceMapperError::CollisionError(stem));
-        }
-        name_map.insert(stem, is_cfile);
-    }
+        .try_for_each(|line| {
+            let Some(m) = re.captures(&line) else {
+                return Ok(());
+            };
+            let source_o_path = format!("{}/{}", dir, &m[1]);
+            let stem = String::from(source_o_path.rsplit_once("/").unwrap().1);
+            let is_cfile = std::path::PathBuf::from(format!("{}.c", source_o_path)).exists();
+            let is_sfile = std::path::PathBuf::from(format!("{}.s", source_o_path)).exists();
+            if is_cfile && is_sfile {
+                return Err(SourceMapperError::CollisionError(stem));
+            }
+            if name_map.get(&stem).is_some_and(|(_, s)| *s != is_cfile) {
+                return Err(SourceMapperError::CollisionError(stem));
+            }
+            let source_rel = source_o_path.replace(dir, "");
+            name_map.insert(stem, (source_rel, is_cfile));
+            Ok(())
+        })?;
 
     Ok(name_map)
 }

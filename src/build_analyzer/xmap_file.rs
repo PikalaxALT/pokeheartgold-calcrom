@@ -1,65 +1,82 @@
 use regex::Regex;
 use std::collections::HashMap;
 
-pub struct SingleFileStats {
-    pub code_bytes: u32,
-    pub data_bytes: u32,
-    pub is_asm: bool,
+/// Returns Some(true) if the section is code, Some(false) if data, None if neither
+fn is_section_code(name: &str) -> Option<bool> {
+    match name {
+        ".text" => Some(true),
+        ".init" => Some(true),
+        ".itcm" => Some(true),
+        ".sinit" => Some(true),
+        ".wram" => Some(true),
+        ".data" => Some(false),
+        ".rodata" => Some(false),
+        ".sdata" => Some(false),
+        ".dtcm" => Some(false),
+        ".exception" => Some(false),
+        ".version" => Some(false),
+        _ => None,
+    }
 }
 
+pub struct XmapSymbol {
+    pub symbol_name: String,
+    pub section_name: String,
+    pub is_code: bool,
+    pub size: usize,
+}
+
+/// Maps (stem, is_cfile) to Vec<XmapSymbol>
 pub fn parse_xmap(
     path: &String,
-    source_map: &HashMap<String, bool>,
-) -> HashMap<String, SingleFileStats> {
-    let mut result = HashMap::<String, SingleFileStats>::new();
+    source_map: &HashMap<String, (String, bool)>,
+) -> HashMap<(String, bool), Vec<XmapSymbol>> {
+    let mut result = HashMap::<(String, bool), Vec<XmapSymbol>>::new();
     let pat = Regex::new(r"^\s*(?<addr>[0-9A-F]{8})\s+(?<size>[0-9A-F]{8})\s+(?<section>\S+)\s+(?<name>\S+)\t\((?<ofile>\S+)\.o\)$").unwrap();
-    let text_sections = [".text", ".init", ".itcm"];
-    let data_sections = [".data", ".rodata", ".sdata", ".dtcm"];
 
     std::fs::read_to_string(path)
         .expect(&std::format!("no such file or directory: {}", path))
         .lines()
         .map(String::from)
         .for_each(|line| {
+            // Parse the xmap line
             let Some(caps) = pat.captures(&line) else {
                 return;
             };
-            let size = u32::from_str_radix(&caps["size"], 16).unwrap();
+
+            // Get the object size
+            let size = usize::from_str_radix(&caps["size"], 16).unwrap();
             if size == 0 {
                 return;
             }
+
+            // Get the source file name (stem)
             let name = String::from(&caps["ofile"]);
-            let Some(is_cfile) = source_map.get(&name) else {
+            let Some((ofile_name, is_cfile)) = source_map.get(&name) else {
                 return;
             };
-            if result.get(&name).is_none() {
-                result.insert(
-                    name.to_string(),
-                    SingleFileStats {
-                        code_bytes: 0,
-                        data_bytes: 0,
-                        is_asm: !*is_cfile,
-                    },
-                );
-            }
-            let cur_result = result.get_mut(&name).unwrap();
-            let is_text = text_sections.contains(&&caps["section"]);
-            let is_data = data_sections.contains(&&caps["section"]);
-            let ref_cur_bytes: &mut u32;
-            if is_text {
-                ref_cur_bytes = &mut cur_result.code_bytes;
-            } else if is_data {
-                ref_cur_bytes = &mut cur_result.data_bytes;
-            } else {
+
+            // Get the section type
+            let Some(is_text) = is_section_code(&caps["section"]) else {
                 return;
-            }
-            if cur_result.is_asm {
-                if caps["name"] == caps["section"] {
-                    *ref_cur_bytes = size;
+            };
+
+            // Get file data
+            let key = (ofile_name.clone(), *is_cfile);
+            let cur_result = match result.get_mut(&key) {
+                Some(vec) => vec,
+                None => {
+                    result.insert(key.clone(), Vec::<XmapSymbol>::new());
+                    result.get_mut(&key).unwrap()
                 }
-            } else {
-                *ref_cur_bytes += size;
-            }
+            };
+
+            cur_result.push(XmapSymbol {
+                symbol_name: caps["name"].to_string(),
+                section_name: caps["section"].to_string(),
+                is_code: is_text,
+                size: size,
+            });
         });
 
     result
