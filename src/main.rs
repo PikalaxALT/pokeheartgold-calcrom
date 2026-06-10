@@ -6,6 +6,21 @@ use crate::build_analyzer::Stats;
 mod build_analyzer;
 mod source_mapper;
 
+struct SimpleLogger;
+
+impl log::Log for SimpleLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        eprintln!("{} - {}", record.level(), record.args());
+    }
+
+    fn flush(&self) {}
+}
+
+static LOGGER: SimpleLogger = SimpleLogger;
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -56,6 +71,10 @@ fn report(
 }
 
 pub fn main() {
+    log::set_logger(&LOGGER)
+        .map(|()| log::set_max_level(log::LevelFilter::Debug))
+        .expect("log init failed");
+
     let args = Args::parse();
 
     let mut results = Vec::<(String, Stats)>::new();

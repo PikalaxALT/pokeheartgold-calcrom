@@ -1,4 +1,5 @@
 use elf::segment::ProgramHeader;
+use log::*;
 use std::collections::HashMap;
 use std::option::Option;
 use std::path::PathBuf;
@@ -62,6 +63,12 @@ fn count_hardcoded_pointers(
                     .is_some()
                 && elf.rels.iter().find(|rel| rel.r_offset == *addr).is_none()
                 && elf.relas.iter().find(|rel| rel.r_offset == *addr).is_none()
+        })
+        .map(|(addr, my_word)| {
+            debug!(
+                target: "hardcoded pointers",
+                "Hardcoded pointer: {0} | {1} | 0x{addr:08X} | 0x{my_word:08X}", elf.filename, sym.name
+            )
         })
         .count()
 }

@@ -19,6 +19,7 @@ pub struct NamedSymbol {
 }
 
 pub struct ElfFile {
+    pub filename: String,
     pub sections: Vec<SectionHeaderWithData>,
     pub segments: Vec<ProgramHeader>,
     pub symbols: Vec<NamedSymbol>,
@@ -104,6 +105,7 @@ impl ElfFile {
             .collect::<Vec<_>>();
 
         ElfFile {
+            filename: elf_name.to_owned(),
             sections: section_headers,
             segments: program_headers,
             symbols: syms,
