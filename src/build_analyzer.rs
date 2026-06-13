@@ -88,16 +88,12 @@ pub fn analyze_build(
         hardcoded_pointers: 0,
     };
 
-    let build_subdir: String;
-    match buildname {
-        Some(my_name) => {
-            build_subdir = std::format!("build/{}", my_name);
-        }
-        None => {
-            build_subdir = String::from("build");
-        }
-    }
-    let build_path = std::format!("{}/{}", basedir, build_subdir);
+    let build_path = [Some(basedir), Some(&String::from("build")), buildname]
+        .iter()
+        .filter_map(|x| x.to_owned())
+        .map(|x| x.to_owned())
+        .collect::<Vec<_>>()
+        .join("/");
 
     // Load the xMAP file
     let xmap_name = std::format!("{}/{}.elf.xMAP", build_path, name);
@@ -126,15 +122,14 @@ pub fn analyze_build(
             .iter()
             .filter(|nsym| nsym.sym.st_size != 0)
             .map(|nsym| (nsym, xmapped_syms.get(&nsym.name)))
-            .filter_map(|(nsym, xsym)| match xsym {
-                Some(rxsym) => {
-                    if *is_cfile || rxsym.section_name == nsym.name {
-                        Some((nsym, rxsym))
-                    } else {
-                        None
-                    }
+            .filter_map(|(nsym, xsym)| {
+                if let Some(rxsym) = xsym
+                    && (*is_cfile || rxsym.section_name == nsym.name)
+                {
+                    Some((nsym, rxsym))
+                } else {
+                    None
                 }
-                None => None,
             })
             .for_each(|(nsym, sym)| {
                 let counter = match (*is_cfile, sym.is_code) {

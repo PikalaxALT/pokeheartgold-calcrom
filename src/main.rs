@@ -83,35 +83,25 @@ pub fn main() {
     let name_sub = "ichneumon_sub";
 
     // Build evaluation plan
-    let arm9_basedir = args
+    if let Some(ref basedir) = args
         .arm9subdir
-        .and_then(|subdir| std::format!("{}/{}", args.rootdir, subdir).into());
-    let arm7_basedir = args
-        .arm7subdir
-        .and_then(|subdir| std::format!("{}/{}", args.rootdir, subdir).into());
-    match arm9_basedir {
-        Some(ref basedir) => {
-            let source_map = source_mapper::get_source_files(basedir, name_main).unwrap();
-            args.buildnames.into_iter().for_each(|buildname| {
-                let stats = build_analyzer::analyze_build(
-                    basedir,
-                    Some(&buildname),
-                    name_main,
-                    &source_map,
-                );
-                results.push((buildname.clone(), stats));
-            });
-        }
-        None => {}
+        .and_then(|subdir| std::format!("{}/{}", args.rootdir, subdir).into())
+    {
+        let source_map = source_mapper::get_source_files(basedir, name_main).unwrap();
+        args.buildnames.into_iter().for_each(|buildname| {
+            let stats =
+                build_analyzer::analyze_build(basedir, Some(&buildname), name_main, &source_map);
+            results.push((buildname.clone(), stats));
+        });
     }
 
-    match arm7_basedir {
-        Some(ref basedir) => {
-            let source_map = source_mapper::get_source_files(basedir, name_sub).unwrap();
-            let stats = build_analyzer::analyze_build(basedir, None, name_sub, &source_map);
-            results.push((name_sub.to_string(), stats));
-        }
-        None => {}
+    if let Some(ref basedir) = args
+        .arm7subdir
+        .and_then(|subdir| std::format!("{}/{}", args.rootdir, subdir).into())
+    {
+        let source_map = source_mapper::get_source_files(basedir, name_sub).unwrap();
+        let stats = build_analyzer::analyze_build(basedir, None, name_sub, &source_map);
+        results.push((name_sub.to_string(), stats));
     }
 
     // Execute plan

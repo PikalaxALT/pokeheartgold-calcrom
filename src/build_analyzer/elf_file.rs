@@ -47,16 +47,17 @@ impl ElfFile {
 
         // read tables
         // Get the program headers for the load offsets and sizes
-        let program_headers = match elf_bytes.segments() {
-            Some(phdr_tab) => phdr_tab.into_iter().collect::<Vec<_>>(),
-            None => Vec::<_>::new(),
-        };
+        let program_headers = elf_bytes
+            .segments()
+            .into_iter()
+            .flat_map(|t| t.into_iter())
+            .collect::<Vec<_>>();
 
         // Get the section headers and strtab to find the code/data in the final ROM
         let section_headers = elf_bytes
             .section_headers()
-            .expect("could not get shdr")
             .into_iter()
+            .flat_map(|s| s.into_iter())
             .map(|shdr| SectionHeaderWithData {
                 shdr: shdr,
                 data: elf_bytes

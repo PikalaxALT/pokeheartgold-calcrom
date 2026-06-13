@@ -62,13 +62,9 @@ pub fn parse_xmap(
 
             // Get file data
             let key = (ofile_name.clone(), *is_cfile);
-            let cur_result = match result.get_mut(&key) {
-                Some(vec) => vec,
-                None => {
-                    result.insert(key.clone(), HashMap::<String, XmapSymbol>::new());
-                    result.get_mut(&key).unwrap()
-                }
-            };
+            let cur_result = result
+                .entry(key)
+                .or_insert_with(HashMap::<String, XmapSymbol>::new);
 
             assert!(
                 cur_result
