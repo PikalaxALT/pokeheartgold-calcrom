@@ -53,37 +53,36 @@ fn count_hardcoded_pointers(
     sym: &NamedSymbol,
     elf: &ElfFile,
     phdr_ranges: &Vec<(u64, u64)>,
-) -> usize {
-    let raw_data = elf.symbol_data(sym).expect("failed to parse sym data");
+) -> Result<usize, Box<dyn Error>> {
+    let raw_data = elf.symbol_data(sym)?;
     let sh_addr = sym.sym.st_value;
     // Loop over 32-bit words
-    raw_data
+    let num = raw_data
         .as_chunks::<4>()
         .0
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(idx, word_raw)| {
-            (
-                sh_addr + u64::try_from(4 * idx).unwrap(),
-                u64::from(u32::from_le_bytes(*word_raw)),
-            )
-        })
-        .filter(|(addr, my_word)| {
-            *my_word >= 0x01000000
+        .map(|(idx, word_raw)| -> Result<Option<(u64, u64)>, Box<dyn Error>> {
+            let offset = u64::try_from(4 * idx)?;
+            let addr = sh_addr + offset;
+            let my_word = u64::from(u32::from_le_bytes(word_raw.to_owned()));
+            if my_word >= 0x01000000
                 && phdr_ranges
                     .iter()
-                    .find(|region| region.0 <= *my_word && *my_word < region.1)
+                    .find(|region| region.0 <= my_word && my_word < region.1)
                     .is_some()
-                && elf.rels.iter().find(|rel| rel.r_offset == *addr).is_none()
-                && elf.relas.iter().find(|rel| rel.r_offset == *addr).is_none()
+                && elf.rels.iter().find(|rel| rel.r_offset == addr).is_none()
+                && elf.relas.iter().find(|rel| rel.r_offset == addr).is_none() {
+                    debug!(
+                        target: "hardcoded pointers",
+                        "Hardcoded pointer: {0} | {1} | 0x{addr:08X} | 0x{my_word:08X}", elf.filename, sym.name
+                    );
+                    Ok(Some((addr, my_word)))
+                } else {Ok(None)}
         })
-        .map(|(addr, my_word)| {
-            debug!(
-                target: "hardcoded pointers",
-                "Hardcoded pointer: {0} | {1} | 0x{addr:08X} | 0x{my_word:08X}", elf.filename, sym.name
-            )
-        })
-        .count()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter().flatten(/* Removes None */).count();
+    Ok(num)
 }
 
 pub fn analyze_build(
@@ -120,46 +119,48 @@ pub fn analyze_build(
     let elf_name = std::format!("{}/{}.elf", build_path, name);
     let elf_file = ElfFile::from_path(&elf_name);
     let elf_segment_bounds = segments_to_ranges(&elf_file.segments);
-    source_map.iter().for_each(|(_stem, (subpath, is_cfile))| {
-        let ofile_path = format!("{}/{}.o", build_path, subpath);
-        let ofile_pathbuf = PathBuf::from(&ofile_path);
-        if !ofile_pathbuf.exists() {
-            warn!("no such file or directory: {}", ofile_path);
-            return;
-        }
-        let ofile_elf = ElfFile::from_path(&ofile_path);
-        stats.resolved_pointers += ofile_elf.rels.len() + ofile_elf.relas.len();
-        let Some(xmapped_syms) = xmap.get(&(subpath.clone(), *is_cfile)) else {
-            return;
-        };
-
-        // Select syms that appear in the xmap file
-        ofile_elf
-            .symbols
-            .iter()
-            .filter_map(|nsym| {
-                if nsym.sym.st_size == 0 {
-                    None
-                } else if let Some(rxsym) = xmapped_syms.get(&nsym.name)
-                    && (*is_cfile || rxsym.section_name == nsym.name)
-                {
-                    Some((nsym, rxsym))
-                } else {
-                    None
+    source_map
+        .iter()
+        .map(
+            |(_stem, (subpath, is_cfile))| -> Result<(), Box<dyn Error>> {
+                let ofile_path = format!("{}/{}.o", build_path, subpath);
+                let ofile_pathbuf = PathBuf::from(&ofile_path);
+                if !ofile_pathbuf.exists() {
+                    warn!("no such file or directory: {}", ofile_path);
+                    return Ok(());
                 }
-            })
-            .for_each(|(nsym, sym)| {
-                let counter = match (*is_cfile, sym.is_code) {
-                    (true, true) => &mut stats.c_code_bytes,
-                    (true, false) => &mut stats.c_data_bytes,
-                    (false, true) => &mut stats.asm_code_bytes,
-                    (false, false) => &mut stats.asm_data_bytes,
+                let ofile_elf = ElfFile::from_path(&ofile_path);
+                stats.resolved_pointers += ofile_elf.rels.len() + ofile_elf.relas.len();
+                let Some(xmapped_syms) = xmap.get(&(subpath.clone(), *is_cfile)) else {
+                    return Ok(());
                 };
-                *counter += sym.size;
-                stats.hardcoded_pointers +=
-                    count_hardcoded_pointers(&nsym, &ofile_elf, &elf_segment_bounds);
-            });
-    });
+
+                // Select syms that appear in the xmap file
+                ofile_elf
+                    .symbols
+                    .iter()
+                    .map(|nsym| -> Result<(), Box<dyn Error>> {
+                        if nsym.sym.st_size != 0
+                            && let Some(rxsym) = xmapped_syms.get(&nsym.name)
+                            && (*is_cfile || rxsym.section_name == nsym.name)
+                        {
+                            let counter = match (*is_cfile, rxsym.is_code) {
+                                (true, true) => &mut stats.c_code_bytes,
+                                (true, false) => &mut stats.c_data_bytes,
+                                (false, true) => &mut stats.asm_code_bytes,
+                                (false, false) => &mut stats.asm_data_bytes,
+                            };
+                            *counter += rxsym.size;
+                            stats.hardcoded_pointers +=
+                                count_hardcoded_pointers(&nsym, &ofile_elf, &elf_segment_bounds)?;
+                        }
+                        Ok(())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(())
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(stats)
 }
