@@ -1,8 +1,8 @@
 use elf::segment::ProgramHeader;
 use log::*;
-use std::collections::HashMap;
 use std::option::Option;
 use std::path::PathBuf;
+use std::{collections::HashMap, error::Error};
 
 use crate::build_analyzer::elf_file::{ElfFile, NamedSymbol};
 
@@ -20,19 +20,32 @@ pub struct Stats {
 }
 
 fn segments_to_ranges(program_headers: &Vec<ProgramHeader>) -> Vec<(u64, u64)> {
+    // Build a Vec of (start, end) pairs
     let mut phdr_sorted = program_headers
         .iter()
         .map(|phdr| (phdr.p_vaddr, phdr.p_vaddr + phdr.p_memsz))
         .collect::<Vec<_>>();
+
+    // Merge overlapping ranges
+    // Sort by start address
     phdr_sorted.sort();
     let mut phdr_ranges = Vec::<(u64, u64)>::new();
     phdr_sorted.into_iter().for_each(|(start, end)| {
-        if phdr_ranges.is_empty() || phdr_ranges.last_mut().unwrap().1 <= start {
-            phdr_ranges.push((start, end));
+        if let Some(last_mut) = phdr_ranges.last_mut()
+            && last_mut.1 >= start
+        {
+            last_mut.1 = end;
         } else {
-            phdr_ranges.last_mut().unwrap().1 = end;
+            phdr_ranges.push((start, end));
         }
     });
+
+    debug!(
+        target: "phdr collapse",
+        "Collapsed {} programs into {} contiguous address ranges",
+        program_headers.len(),
+        phdr_ranges.len()
+    );
     phdr_ranges
 }
 
@@ -75,10 +88,10 @@ fn count_hardcoded_pointers(
 
 pub fn analyze_build(
     basedir: &String,
-    buildname: Option<&String>,
-    name: &str,
+    buildname: &Option<String>,
+    name: &String,
     source_map: &HashMap<String, (String, bool)>,
-) -> Stats {
+) -> Result<Stats, Box<dyn Error>> {
     let mut stats = Stats {
         c_code_bytes: 0,
         c_data_bytes: 0,
@@ -88,16 +101,20 @@ pub fn analyze_build(
         hardcoded_pointers: 0,
     };
 
-    let build_path = [Some(basedir), Some(&String::from("build")), buildname]
-        .iter()
-        .filter_map(|x| x.to_owned())
-        .map(|x| x.to_owned())
-        .collect::<Vec<_>>()
-        .join("/");
+    let build_path = [
+        Some(basedir),
+        Some(&String::from("build")),
+        buildname.as_ref(),
+    ]
+    .iter()
+    .filter_map(|x| x.to_owned())
+    .map(|x| x.to_owned())
+    .collect::<Vec<_>>()
+    .join("/");
 
     // Load the xMAP file
     let xmap_name = std::format!("{}/{}.elf.xMAP", build_path, name);
-    let xmap = xmap_file::parse_xmap(&xmap_name, source_map);
+    let xmap = xmap_file::parse_xmap(&xmap_name, source_map)?;
 
     // Read the ELF file into memory and make sure it does in fact represent an NDS binary
     let elf_name = std::format!("{}/{}.elf", build_path, name);
@@ -107,7 +124,7 @@ pub fn analyze_build(
         let ofile_path = format!("{}/{}.o", build_path, subpath);
         let ofile_pathbuf = PathBuf::from(&ofile_path);
         if !ofile_pathbuf.exists() {
-            eprintln!("no such file or directory: {}", ofile_path);
+            warn!("no such file or directory: {}", ofile_path);
             return;
         }
         let ofile_elf = ElfFile::from_path(&ofile_path);
@@ -120,10 +137,10 @@ pub fn analyze_build(
         ofile_elf
             .symbols
             .iter()
-            .filter(|nsym| nsym.sym.st_size != 0)
-            .map(|nsym| (nsym, xmapped_syms.get(&nsym.name)))
-            .filter_map(|(nsym, xsym)| {
-                if let Some(rxsym) = xsym
+            .filter_map(|nsym| {
+                if nsym.sym.st_size == 0 {
+                    None
+                } else if let Some(rxsym) = xmapped_syms.get(&nsym.name)
                     && (*is_cfile || rxsym.section_name == nsym.name)
                 {
                     Some((nsym, rxsym))
@@ -144,5 +161,5 @@ pub fn analyze_build(
             });
     });
 
-    stats
+    Ok(stats)
 }

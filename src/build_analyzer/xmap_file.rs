@@ -1,5 +1,7 @@
 use regex::Regex;
+use std::boxed::Box;
 use std::collections::HashMap;
+use std::error::Error;
 
 /// Returns Some(true) if the section is code, Some(false) if data, None if neither
 fn is_section_code(name: &str) -> Option<bool> {
@@ -29,35 +31,31 @@ pub struct XmapSymbol {
 pub fn parse_xmap(
     path: &String,
     source_map: &HashMap<String, (String, bool)>,
-) -> HashMap<(String, bool), HashMap<String, XmapSymbol>> {
+) -> Result<HashMap<(String, bool), HashMap<String, XmapSymbol>>, Box<dyn Error>> {
     let mut result = HashMap::<(String, bool), HashMap<String, XmapSymbol>>::new();
-    let pat = Regex::new(r"^\s*(?<addr>[0-9A-F]{8})\s+(?<size>[0-9A-F]{8})\s+(?<section>\S+)\s+(?<name>\S+)\t\((?<ofile>\S+)\.o\)$").unwrap();
+    let pat = Regex::new(
+        r"^\s*(?<addr>[0-9A-F]{8})\s+(?<size>[0-9A-F]{8})\s+(?<section>\S+)\s+(?<name>\S+)\t\((?<ofile>\S+)\.o\)$",
+    )?;
 
-    std::fs::read_to_string(path)
-        .expect(&std::format!("no such file or directory: {}", path))
+    std::fs::read_to_string(path)?
         .lines()
-        .map(String::from)
-        .for_each(|line| {
-            // Parse the xmap line
-            let Some(caps) = pat.captures(&line) else {
-                return;
-            };
-
+        .filter_map(|line| pat.captures(&line))
+        .map(|caps| -> Result<(), Box<dyn Error>> {
             // Get the object size
-            let size = usize::from_str_radix(&caps["size"], 16).unwrap();
+            let size = usize::from_str_radix(&caps["size"], 16)?;
             if size == 0 {
-                return;
+                return Ok(());
             }
 
             // Get the source file name (stem)
             let name = String::from(&caps["ofile"]);
             let Some((ofile_name, is_cfile)) = source_map.get(&name) else {
-                return;
+                return Ok(());
             };
 
             // Get the section type
             let Some(is_text) = is_section_code(&caps["section"]) else {
-                return;
+                return Ok(());
             };
 
             // Get file data
@@ -66,19 +64,20 @@ pub fn parse_xmap(
                 .entry(key)
                 .or_insert_with(HashMap::<String, XmapSymbol>::new);
 
-            assert!(
-                cur_result
-                    .insert(
-                        caps["name"].to_string(),
-                        XmapSymbol {
-                            section_name: caps["section"].to_string(),
-                            is_code: is_text,
-                            size: size,
-                        },
-                    )
-                    .is_none()
-            );
-        });
+            if let Some(_r) = cur_result.insert(
+                caps["name"].to_string(),
+                XmapSymbol {
+                    section_name: caps["section"].to_string(),
+                    is_code: is_text,
+                    size: size,
+                },
+            ) {
+                Err(format!("Collision on {}", ofile_name).into())
+            } else {
+                Ok(())
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-    result
+    Ok(result)
 }

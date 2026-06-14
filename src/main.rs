@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::error::Error;
 use std::option::Option;
 use std::vec::Vec;
 
@@ -13,7 +14,12 @@ impl log::Log for SimpleLogger {
         true
     }
     fn log(&self, record: &log::Record) {
-        eprintln!("{} - {}", record.level(), record.args());
+        eprintln!(
+            "{} - {} - {}",
+            record.level(),
+            record.target(),
+            record.args()
+        );
     }
 
     fn flush(&self) {}
@@ -70,41 +76,54 @@ fn report(
     }
 }
 
+struct RunPlan {
+    basedir: String,
+    buildname: Option<String>,
+    name: String,
+}
+
+impl Args {
+    fn run(&self) -> Result<Vec<(String, Stats)>, Box<dyn Error>> {
+        Ok(std::iter::chain(
+            self.buildnames.iter().flat_map(|buildname| {
+                self.arm9subdir.iter().filter_map(|subdir| {
+                    Some(RunPlan {
+                        basedir: std::format!("{}/{}", self.rootdir, subdir),
+                        buildname: Some(buildname.clone()),
+                        name: String::from("main"),
+                    })
+                })
+            }),
+            self.arm7subdir.iter().filter_map(|subdir| {
+                Some(RunPlan {
+                    basedir: std::format!("{}/{}", self.rootdir, subdir),
+                    buildname: None,
+                    name: String::from("ichneumon_sub"),
+                })
+            }),
+        )
+        .map(|plan| -> Result<(String, Stats), Box<dyn Error>> {
+            let source_map =
+                source_mapper::get_source_files(plan.basedir.clone(), plan.name.clone())?;
+            let stats = build_analyzer::analyze_build(
+                &plan.basedir,
+                &plan.buildname,
+                &plan.name,
+                &source_map,
+            )?;
+            Ok((plan.buildname.unwrap_or(plan.name), stats))
+        })
+        .collect::<Result<Vec<_>, _>>()?)
+    }
+}
+
 pub fn main() {
     log::set_logger(&LOGGER)
         .map(|()| log::set_max_level(log::LevelFilter::Debug))
         .expect("log init failed");
 
     let args = Args::parse();
-
-    let mut results = Vec::<(String, Stats)>::new();
-
-    let name_main = "main";
-    let name_sub = "ichneumon_sub";
-
-    // Build evaluation plan
-    if let Some(ref basedir) = args
-        .arm9subdir
-        .and_then(|subdir| std::format!("{}/{}", args.rootdir, subdir).into())
-    {
-        let source_map = source_mapper::get_source_files(basedir, name_main).unwrap();
-        args.buildnames.into_iter().for_each(|buildname| {
-            let stats =
-                build_analyzer::analyze_build(basedir, Some(&buildname), name_main, &source_map);
-            results.push((buildname.clone(), stats));
-        });
-    }
-
-    if let Some(ref basedir) = args
-        .arm7subdir
-        .and_then(|subdir| std::format!("{}/{}", args.rootdir, subdir).into())
-    {
-        let source_map = source_mapper::get_source_files(basedir, name_sub).unwrap();
-        let stats = build_analyzer::analyze_build(basedir, None, name_sub, &source_map);
-        results.push((name_sub.to_string(), stats));
-    }
-
-    // Execute plan
+    let results = args.run().expect("processing error");
     results.into_iter().for_each(|(buildname, stats)| {
         println!("Analysis of {} binary:", buildname);
         report(
