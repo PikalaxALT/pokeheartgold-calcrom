@@ -117,7 +117,7 @@ pub fn analyze_build(
 
     // Read the ELF file into memory and make sure it does in fact represent an NDS binary
     let elf_name = std::format!("{}/{}.elf", build_path, name);
-    let elf_file = ElfFile::from_path(&elf_name);
+    let elf_file = ElfFile::from_path(&elf_name)?;
     let elf_segment_bounds = segments_to_ranges(&elf_file.segments);
     source_map
         .iter()
@@ -129,7 +129,7 @@ pub fn analyze_build(
                     warn!("no such file or directory: {}", ofile_path);
                     return Ok(());
                 }
-                let ofile_elf = ElfFile::from_path(&ofile_path);
+                let ofile_elf = ElfFile::from_path(&ofile_path)?;
                 stats.resolved_pointers += ofile_elf.rels.len() + ofile_elf.relas.len();
                 let Some(xmapped_syms) = xmap.get(&(subpath.clone(), *is_cfile)) else {
                     return Ok(());
