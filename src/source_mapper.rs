@@ -6,7 +6,7 @@ use regex::Regex;
 #[cached()]
 pub fn get_source_files(
     dir: String,
-    linkname: String,
+    linkname: &'static str,
 ) -> Result<HashMap<String, (String, bool)>, Box<dyn Error>> {
     let re = Regex::new(r"^\s*Object\s+(\S+)\.o")?;
     let mut name_map = HashMap::<String, (String, bool)>::new();

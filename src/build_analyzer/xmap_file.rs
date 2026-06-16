@@ -59,7 +59,7 @@ pub fn parse_xmap(
             };
 
             // Get file data
-            let key = (ofile_name.clone(), *is_cfile);
+            let key = (ofile_name.to_owned(), is_cfile.to_owned());
             let cur_result = result
                 .entry(key)
                 .or_insert_with(HashMap::<String, XmapSymbol>::new);
