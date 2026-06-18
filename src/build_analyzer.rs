@@ -1,15 +1,13 @@
-use elf::segment::ProgramHeader;
-use log::*;
-use std::option::Option;
-use std::path::PathBuf;
-use std::{collections::HashMap, error::Error};
-
 use crate::build_analyzer::elf_file::{ElfFile, NamedSymbol};
-
+use elf::segment::ProgramHeader;
+use itertools::Itertools;
+use log::*;
+use std::{collections::HashMap, error::Error, option::Option, path::PathBuf};
 mod elf_file;
 mod xmap_file;
 
 /// Collects statistics about the decompilation effort based on the build outputs
+#[derive(Default)]
 pub struct Stats {
     pub c_code_bytes: usize,
     pub c_data_bytes: usize,
@@ -24,17 +22,17 @@ fn segments_to_ranges(program_headers: &Vec<ProgramHeader>) -> Vec<(u64, u64)> {
     let mut phdr_sorted = program_headers
         .iter()
         .map(|phdr| (phdr.p_vaddr, phdr.p_vaddr + phdr.p_memsz))
-        .collect::<Vec<_>>();
+        .collect_vec();
 
     // Merge overlapping ranges
     // Sort by start address
     phdr_sorted.sort();
     let mut phdr_ranges = Vec::<(u64, u64)>::new();
     phdr_sorted.into_iter().for_each(|(start, end)| {
-        if let Some(last_mut) = phdr_ranges.last_mut()
-            && last_mut.1 >= start
+        if let Some((_, lmend)) = phdr_ranges.last_mut()
+            && *lmend >= start
         {
-            last_mut.1 = end;
+            *lmend = end;
         } else {
             phdr_ranges.push((start, end));
         }
@@ -71,7 +69,7 @@ fn count_hardcoded_pointers(
                     .find(|region| region.0 <= my_word && my_word < region.1)
                     .is_some())
         })
-        .collect::<Result<Vec<_>, _>>()?
+        .process_results(|iter| iter.collect_vec())?
         .into_iter()
         .filter(|x| x.to_owned())
         .count();
@@ -84,14 +82,7 @@ pub fn analyze_build(
     name: &'static str,
     source_map: &HashMap<String, (String, bool)>,
 ) -> Result<Stats, Box<dyn Error>> {
-    let mut stats = Stats {
-        c_code_bytes: 0,
-        c_data_bytes: 0,
-        asm_code_bytes: 0,
-        asm_data_bytes: 0,
-        resolved_pointers: 0,
-        hardcoded_pointers: 0,
-    };
+    let mut stats = Stats::default();
 
     let build_path = [
         Some(basedir),
@@ -101,7 +92,7 @@ pub fn analyze_build(
     .iter()
     .filter_map(|x| x.to_owned())
     .map(|x| x.to_owned())
-    .collect::<Vec<_>>()
+    .collect_vec()
     .join("/");
 
     // Load the xMAP file
@@ -154,11 +145,11 @@ pub fn analyze_build(
                         }
                         Ok(())
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .process_results(|iter| iter.collect_vec())?;
                 Ok(())
             },
         )
-        .collect::<Result<Vec<_>, _>>()?;
+        .process_results(|iter| iter.collect_vec())?;
 
     Ok(stats)
 }

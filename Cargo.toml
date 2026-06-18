@@ -7,5 +7,6 @@ edition = "2024"
 cached = "2.0.2"
 clap = { version = "4.6.1", features = ["derive"] }
 elf = "0.8.0"
+itertools = "0.15.0"
 log = { version = "0.4.32", features = ["release_max_level_info", "max_level_debug"] }
 regex = "1.12.3"

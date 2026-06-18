@@ -1,9 +1,7 @@
-use clap::Parser;
-use std::error::Error;
-use std::option::Option;
-use std::vec::Vec;
-
 use crate::build_analyzer::Stats;
+use clap::Parser;
+use itertools::Itertools;
+use std::{error::Error, option::Option, vec::Vec};
 mod build_analyzer;
 mod source_mapper;
 
@@ -143,7 +141,7 @@ impl Args {
             )?;
             Ok((plan.buildname.unwrap_or(plan.elf_stem.to_string()), stats))
         })
-        .collect::<Result<Vec<_>, _>>()?)
+        .process_results(|iter| iter.collect_vec())?)
     }
 }
 

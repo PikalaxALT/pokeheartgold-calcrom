@@ -1,24 +1,28 @@
-use elf::ElfBytes;
-use elf::endian::LittleEndian;
-use elf::relocation::Rel;
-use elf::relocation::Rela;
-use elf::section::SectionHeader;
-use elf::segment::ProgramHeader;
-use elf::symbol::Symbol;
-use std::error::Error;
-use std::path::PathBuf;
-use std::vec::Vec;
+use elf::{
+    ElfBytes,
+    endian::LittleEndian,
+    relocation::{Rel, Rela},
+    section::SectionHeader,
+    segment::ProgramHeader,
+    symbol::Symbol,
+};
+use itertools::Itertools;
+use std::{error::Error, path::PathBuf, vec::Vec};
 
+/// A wrapper struct that associates an Elf section with its data
 pub struct SectionHeaderWithData {
     pub shdr: SectionHeader,
     pub data: Vec<u8>,
 }
 
+/// A wrapper struct that associates an Elf symbol with its name
 pub struct NamedSymbol {
     pub sym: Symbol,
     pub name: String,
 }
 
+/// A wrapper struct representing a parsed ELF.
+/// Contains sections, segments, symbols, and relocations with and without addend.
 pub struct ElfFile {
     pub sections: Vec<SectionHeaderWithData>,
     pub segments: Vec<ProgramHeader>,
@@ -29,6 +33,8 @@ pub struct ElfFile {
 
 impl ElfFile {
     pub fn from_path(elf_name: &String) -> Result<ElfFile, Box<dyn Error>> {
+        // Load the ELF file into memory and assert that it is a 32-bit ARM elf.
+        // Anything else is unsupported
         let elf_path = PathBuf::from(elf_name);
         let elf_data = std::fs::read(elf_path)?;
         let elf_bytes = ElfBytes::<LittleEndian>::minimal_parse(elf_data.as_slice())?;
@@ -46,46 +52,47 @@ impl ElfFile {
             .segments()
             .into_iter()
             .flat_map(|t| t.into_iter())
-            .collect::<Vec<_>>();
+            .collect_vec();
 
         // Get the section headers and strtab to find the code/data in the final ROM
-        let section_headers = elf_bytes
+        let section_headers_raw = elf_bytes
             .section_headers()
             .into_iter()
             .flat_map(|s| s.into_iter())
+            .collect_vec();
+        let section_headers_by_type = section_headers_raw
+            .iter()
+            .into_group_map_by(|shdr| shdr.sh_type);
+
+        let section_headers = section_headers_raw
+            .iter()
             .map(|shdr| -> Result<SectionHeaderWithData, elf::ParseError> {
                 Ok(SectionHeaderWithData {
-                    shdr: shdr,
+                    shdr: shdr.to_owned(),
                     data: elf_bytes.section_data(&shdr)?.0.to_vec(),
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .process_results(|iter| iter.collect_vec())?;
 
-        let rels = section_headers
+        let rels = section_headers_by_type
+            .get(&elf::abi::SHT_REL)
+            .unwrap_or(&Vec::<&SectionHeader>::new())
             .iter()
-            .filter(|shdr| shdr.shdr.sh_type == elf::abi::SHT_REL)
-            .map(
-                |shdr| -> Result<elf::relocation::RelIterator<LittleEndian>, elf::ParseError> {
-                    Ok(elf_bytes.section_data_as_rels(&shdr.shdr)?)
-                },
-            )
-            .collect::<Result<Vec<_>, _>>()?
+            .map(|shdr| elf_bytes.section_data_as_rels(&shdr))
+            .process_results(|iter| iter.collect_vec())?
             .into_iter()
             .flatten()
-            .collect::<Vec<_>>();
+            .collect_vec();
 
-        let relas = section_headers
+        let relas = section_headers_by_type
+            .get(&elf::abi::SHT_RELA)
+            .unwrap_or(&Vec::<&SectionHeader>::new())
             .iter()
-            .filter(|shdr| shdr.shdr.sh_type == elf::abi::SHT_RELA)
-            .map(
-                |shdr| -> Result<elf::relocation::RelaIterator<LittleEndian>, elf::ParseError> {
-                    Ok(elf_bytes.section_data_as_relas(&shdr.shdr)?)
-                },
-            )
-            .collect::<Result<Vec<_>, _>>()?
+            .map(|shdr| elf_bytes.section_data_as_relas(&shdr))
+            .process_results(|iter| iter.collect_vec())?
             .into_iter()
             .flatten()
-            .collect::<Vec<_>>();
+            .collect_vec();
 
         let Some((symtab, strtab)) = elf_bytes.symbol_table()? else {
             return Err("no symtab or strtab".into());
@@ -98,7 +105,7 @@ impl ElfFile {
                     sym: sym,
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .process_results(|iter| iter.collect_vec())?;
 
         Ok(ElfFile {
             sections: section_headers,

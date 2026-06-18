@@ -1,7 +1,6 @@
+use itertools::Itertools;
 use regex::Regex;
-use std::boxed::Box;
-use std::collections::HashMap;
-use std::error::Error;
+use std::{boxed::Box, collections::HashMap, error::Error};
 
 /// Returns Some(true) if the section is code, Some(false) if data, None if neither
 fn is_section_code(name: &str) -> Option<bool> {
@@ -77,7 +76,7 @@ pub fn parse_xmap(
                 Ok(())
             }
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .process_results(|iter| iter.collect_vec())?;
 
     Ok(result)
 }

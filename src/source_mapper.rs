@@ -1,7 +1,6 @@
-use std::{collections::HashMap, error::Error};
-
 use cached::cached;
 use regex::Regex;
+use std::{collections::HashMap, error::Error};
 
 #[cached()]
 pub fn get_source_files(
