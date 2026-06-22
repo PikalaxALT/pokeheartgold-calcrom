@@ -43,6 +43,14 @@ struct Args {
     /// Names of the built ROM(s)
     #[arg(num_args(0..))]
     buildnames: Vec<String>,
+
+    /// Stem of the ARM9 ELF file
+    #[arg(short = 'm', default_value = "main")]
+    arm9stem: String,
+
+    /// Stem of the ARM7 ELF file
+    #[arg(short = 's', default_value = "ichneumon_sub")]
+    arm7stem: String,
 }
 
 /// Print a report for the current segment
@@ -110,7 +118,7 @@ struct RunPlan {
     buildname: Option<String>,
 
     /// The stem of the ELF file in the build folder and the LSF file in the source root
-    elf_stem: &'static str,
+    elf_stem: String,
 }
 
 impl Args {
@@ -120,23 +128,23 @@ impl Args {
                 self.arm9subdir.iter().map(|subdir| RunPlan {
                     basedir: std::format!("{}/{}", self.rootdir, subdir),
                     buildname: Some(buildname.to_owned()),
-                    elf_stem: "main",
+                    elf_stem: self.arm9stem.to_owned(),
                 })
             }),
             self.arm7subdir.iter().map(|subdir| RunPlan {
                 basedir: std::format!("{}/{}", self.rootdir, subdir),
                 buildname: None,
-                elf_stem: "ichneumon_sub",
+                elf_stem: self.arm7stem.to_owned(),
             }),
         )
         .map(|plan| -> Result<(String, Stats), Box<dyn Error>> {
             // get_source_files is #[cached()] so it needs to own plan.basedir
             let source_map =
-                source_mapper::get_source_files(plan.basedir.to_owned(), plan.elf_stem)?;
+                source_mapper::get_source_files(plan.basedir.to_owned(), plan.elf_stem.to_owned())?;
             let stats = build_analyzer::analyze_build(
                 &plan.basedir,
                 &plan.buildname,
-                plan.elf_stem,
+                &plan.elf_stem,
                 &source_map,
             )?;
             Ok((plan.buildname.unwrap_or(plan.elf_stem.to_string()), stats))

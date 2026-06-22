@@ -1,4 +1,5 @@
 use crate::build_analyzer::elf_file::{ElfFile, NamedSymbol};
+use crate::build_analyzer::xmap_file::XmapSymbol;
 use elf::segment::ProgramHeader;
 use itertools::Itertools;
 use log::*;
@@ -50,10 +51,12 @@ fn segments_to_ranges(program_headers: &Vec<ProgramHeader>) -> Vec<(u64, u64)> {
 /// Count 32-bit words that are possibly hard-coded pointers
 /// This is a liberal upper bound that counts all words whose
 /// values are possible addresses in the final ROM
+#[cfg(debug_assertions)]
 fn count_hardcoded_pointers(
     sym: &NamedSymbol,
     elf: &ElfFile,
     phdr_ranges: &Vec<(u64, u64)>,
+    rxsym: &XmapSymbol,
 ) -> Result<usize, Box<dyn Error>> {
     let raw_data = elf.symbol_data(sym)?;
     // Loop over 32-bit words
@@ -61,17 +64,50 @@ fn count_hardcoded_pointers(
         .as_chunks::<4>()
         .0
         .into_iter()
-        .map(|word_raw| -> Result<bool, Box<dyn Error>> {
+        .enumerate()
+        .map(|(idx, word_raw)| -> Result<(u64, u64), Box<dyn Error>> {
             let my_word = u64::from(u32::from_le_bytes(word_raw.to_owned()));
-            Ok(my_word >= 0x01000000
-                && phdr_ranges
-                    .iter()
-                    .find(|region| region.0 <= my_word && my_word < region.1)
-                    .is_some())
+            let my_addr = rxsym.addr + 4 * u64::try_from(idx)?;
+            Ok((my_addr, my_word))
         })
         .process_results(|iter| iter.collect_vec())?
         .into_iter()
-        .filter(|x| x.to_owned())
+        .filter(|(_, my_word)| {
+            *my_word >= 0x01000000u64
+                && phdr_ranges
+                    .iter()
+                    .find(|region| region.0 <= *my_word && *my_word < region.1)
+                    .is_some()
+        })
+        .inspect(|(my_addr, my_word)| {
+            debug!("hardcoded pointer at 0x{my_addr:08X} --> 0x{my_word:08X}")
+        })
+        .count();
+    Ok(num)
+}
+
+#[cfg(not(debug_assertions))]
+fn count_hardcoded_pointers(
+    sym: &NamedSymbol,
+    elf: &ElfFile,
+    phdr_ranges: &Vec<(u64, u64)>,
+    _rxsym: &XmapSymbol,
+) -> Result<usize, Box<dyn Error>> {
+    let raw_data = elf.symbol_data(sym)?;
+    // Loop over 32-bit words
+    let num = raw_data
+        .as_chunks::<4>()
+        .0
+        .to_owned()
+        .into_iter()
+        .filter(|word_raw| -> bool {
+            let my_word = u64::from(u32::from_le_bytes(word_raw.to_owned()));
+            my_word >= 0x01000000
+                && phdr_ranges
+                    .iter()
+                    .find(|region| region.0 <= my_word && my_word < region.1)
+                    .is_some()
+        })
         .count();
     Ok(num)
 }
@@ -79,9 +115,13 @@ fn count_hardcoded_pointers(
 pub fn analyze_build(
     basedir: &String,
     buildname: &Option<String>,
-    name: &'static str,
+    name: &String,
     source_map: &HashMap<String, (String, bool)>,
 ) -> Result<Stats, Box<dyn Error>> {
+    debug!(
+        "Analyzing build of {}",
+        buildname.to_owned().unwrap_or(name.to_owned())
+    );
     let mut stats = Stats::default();
 
     let build_path = [
@@ -140,8 +180,12 @@ pub fn analyze_build(
                                 (false, false) => &mut stats.asm_data_bytes,
                             };
                             *counter += rxsym.size;
-                            stats.hardcoded_pointers +=
-                                count_hardcoded_pointers(&nsym, &ofile_elf, &elf_segment_bounds)?;
+                            stats.hardcoded_pointers += count_hardcoded_pointers(
+                                &nsym,
+                                &ofile_elf,
+                                &elf_segment_bounds,
+                                &rxsym,
+                            )?;
                         }
                         Ok(())
                     })

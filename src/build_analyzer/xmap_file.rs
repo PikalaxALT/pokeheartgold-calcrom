@@ -24,6 +24,8 @@ pub struct XmapSymbol {
     pub section_name: String,
     pub is_code: bool,
     pub size: usize,
+    #[cfg(debug_assertions)]
+    pub addr: u64,
 }
 
 /// Maps (stem, is_cfile) to Vec<XmapSymbol>
@@ -69,6 +71,8 @@ pub fn parse_xmap(
                     section_name: caps["section"].to_string(),
                     is_code: is_text,
                     size: size,
+                    #[cfg(debug_assertions)]
+                    addr: u64::from_str_radix(&caps["addr"], 16)?,
                 },
             ) {
                 Err(format!("Collision on {}", ofile_name).into())
