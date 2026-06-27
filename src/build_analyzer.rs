@@ -102,7 +102,7 @@ fn count_hardcoded_pointers(
         .into_iter()
         .filter(|word_raw| -> bool {
             let my_word = u64::from(u32::from_le_bytes(word_raw.to_owned()));
-            my_word >= 0x01000000
+            my_word >= 0x01000000u64
                 && phdr_ranges
                     .iter()
                     .find(|region| region.0 <= my_word && my_word < region.1)
@@ -196,4 +196,62 @@ pub fn analyze_build(
         .process_results(|iter| iter.collect_vec())?;
 
     Ok(stats)
+}
+
+#[cfg(test)]
+mod testing {
+    use super::count_hardcoded_pointers;
+    use crate::build_analyzer::{
+        elf_file::{ElfFile, NamedSymbol, SectionHeaderWithData},
+        xmap_file::XmapSymbol,
+    };
+    use elf::{section::SectionHeader, symbol::Symbol};
+
+    #[test]
+    fn test_count_hardcoded_pointers() {
+        let sym = NamedSymbol {
+            name: "foo".into(),
+            sym: Symbol {
+                st_name: 0,
+                st_shndx: 0,
+                st_info: 0,
+                st_other: 0,
+                st_value: 0,
+                st_size: 8,
+            },
+        };
+        let rxsym = XmapSymbol {
+            section_name: ".rodata".into(),
+            is_code: false,
+            size: 8,
+            #[cfg(debug_assertions)]
+            addr: 0x02000000,
+        };
+        let phdr_ranges = vec![(0x02000000u64, 0x02000800u64)];
+        let elffile = ElfFile {
+            sections: vec![SectionHeaderWithData {
+                data: vec![
+                    0x09u8, 0x00u8, 0x00u8, 0x02u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
+                ],
+                shdr: SectionHeader {
+                    sh_name: 0,
+                    sh_type: 0,
+                    sh_flags: 0,
+                    sh_addr: 0,
+                    sh_offset: 0,
+                    sh_size: 0,
+                    sh_link: 0,
+                    sh_info: 0,
+                    sh_addralign: 0,
+                    sh_entsize: 0,
+                },
+            }],
+            segments: vec![],
+            symbols: vec![],
+            rels: vec![],
+            relas: vec![],
+        };
+        let count = count_hardcoded_pointers(&sym, &elffile, &phdr_ranges, &rxsym).unwrap();
+        assert_eq!(count, 1);
+    }
 }
