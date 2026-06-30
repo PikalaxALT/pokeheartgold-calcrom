@@ -1,3 +1,4 @@
+use anyhow::{Context, Result, ensure};
 use elf::{
     ElfBytes,
     endian::LittleEndian,
@@ -7,7 +8,7 @@ use elf::{
     symbol::Symbol,
 };
 use itertools::Itertools;
-use std::{error::Error, path::PathBuf, vec::Vec};
+use std::{path::PathBuf, vec::Vec};
 
 /// A wrapper struct that associates an Elf section with its data
 pub struct SectionHeaderWithData {
@@ -32,19 +33,21 @@ pub struct ElfFile {
 }
 
 impl ElfFile {
-    pub fn from_path(elf_name: &String) -> Result<ElfFile, Box<dyn Error>> {
+    pub fn from_path(elf_name: &String) -> Result<ElfFile> {
         // Load the ELF file into memory and assert that it is a 32-bit ARM elf.
         // Anything else is unsupported
         let elf_path = PathBuf::from(elf_name);
         let elf_data = std::fs::read(elf_path)?;
         let elf_bytes = ElfBytes::<LittleEndian>::minimal_parse(elf_data.as_slice())?;
-        if elf_bytes.ehdr.class != elf::file::Class::ELF32 {
-            return Err("not a 32-bit ELF".into());
-        }
+        ensure!(
+            elf_bytes.ehdr.class == elf::file::Class::ELF32,
+            "not a 32-bit ELF"
+        );
 
-        if elf_bytes.ehdr.e_machine != elf::abi::EM_ARM {
-            return Err("not an ARM32 ELF".into());
-        }
+        ensure!(
+            elf_bytes.ehdr.e_machine == elf::abi::EM_ARM,
+            "not an ARM32 ELF"
+        );
 
         // read tables
         // Get the program headers for the load offsets and sizes
@@ -94,12 +97,10 @@ impl ElfFile {
             .flatten()
             .collect_vec();
 
-        let Some((symtab, strtab)) = elf_bytes.symbol_table()? else {
-            return Err("no symtab or strtab".into());
-        };
+        let (symtab, strtab) = elf_bytes.symbol_table()?.context("no symtab or strtab")?;
         let syms = symtab
             .into_iter()
-            .map(|sym| -> Result<NamedSymbol, Box<dyn Error>> {
+            .map(|sym| -> Result<NamedSymbol> {
                 Ok(NamedSymbol {
                     name: strtab.get(sym.st_name.try_into()?)?.to_string(),
                     sym: sym,
@@ -116,10 +117,11 @@ impl ElfFile {
         })
     }
 
-    pub fn symbol_data(&self, sym: &NamedSymbol) -> Result<Vec<u8>, Box<dyn Error>> {
-        let Some(shdr) = self.sections.get(usize::from(sym.sym.st_shndx)) else {
-            return Err("unrecognized section".into());
-        };
+    pub fn symbol_data(&self, sym: &NamedSymbol) -> Result<Vec<u8>> {
+        let shdr = self
+            .sections
+            .get(usize::from(sym.sym.st_shndx))
+            .context("unrecognized section")?;
         let start = sym.sym.st_value - shdr.shdr.sh_addr;
         let end = start + sym.sym.st_size;
         let result = shdr.data[usize::try_from(start)?..usize::try_from(end)?].to_vec();

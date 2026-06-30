@@ -3,9 +3,10 @@ use crate::build_analyzer::xmap_file::XmapSymbol;
 use elf::segment::ProgramHeader;
 use itertools::Itertools;
 use log::*;
-use std::{collections::HashMap, error::Error, option::Option, path::PathBuf};
+use std::{collections::HashMap, option::Option, path::PathBuf};
 mod elf_file;
 mod xmap_file;
+use anyhow::{Result, ensure};
 
 /// Collects statistics about the decompilation effort based on the build outputs
 #[derive(Default)]
@@ -57,7 +58,7 @@ fn count_hardcoded_pointers(
     elf: &ElfFile,
     phdr_ranges: &Vec<(u64, u64)>,
     rxsym: &XmapSymbol,
-) -> Result<usize, Box<dyn Error>> {
+) -> Result<usize> {
     let raw_data = elf.symbol_data(sym)?;
     // Loop over 32-bit words
     let num = raw_data
@@ -65,7 +66,7 @@ fn count_hardcoded_pointers(
         .0
         .into_iter()
         .enumerate()
-        .map(|(idx, word_raw)| -> Result<(u64, u64), Box<dyn Error>> {
+        .map(|(idx, word_raw)| -> Result<(u64, u64)> {
             let my_word = u64::from(u32::from_le_bytes(word_raw.to_owned()));
             let my_addr = rxsym.addr + 4 * u64::try_from(idx)?;
             Ok((my_addr, my_word))
@@ -92,7 +93,7 @@ fn count_hardcoded_pointers(
     elf: &ElfFile,
     phdr_ranges: &Vec<(u64, u64)>,
     _rxsym: &XmapSymbol,
-) -> Result<usize, Box<dyn Error>> {
+) -> Result<usize> {
     let raw_data = elf.symbol_data(sym)?;
     // Loop over 32-bit words
     let num = raw_data
@@ -117,7 +118,7 @@ pub fn analyze_build(
     buildname: &Option<String>,
     name: &String,
     source_map: &HashMap<String, (String, bool)>,
-) -> Result<Stats, Box<dyn Error>> {
+) -> Result<Stats> {
     debug!(
         "Analyzing build of {}",
         buildname.to_owned().unwrap_or(name.to_owned())
@@ -148,51 +149,50 @@ pub fn analyze_build(
     source_map
         .to_owned()
         .into_iter()
-        .map(
-            |(_stem, (subpath, is_cfile))| -> Result<(), Box<dyn Error>> {
-                // Get the ELF representing the .o file resulting from this C or ASM object
-                // It should exist. Panic if it doesn't.
-                let ofile_path = format!("{}/{}.o", build_path, subpath);
-                let ofile_pathbuf = PathBuf::from(&ofile_path);
-                if !ofile_pathbuf.exists() {
-                    return Err(format!("no such file or directory: {}", ofile_path).into());
-                }
-                let ofile_elf = ElfFile::from_path(&ofile_path)?;
-                // Properly-linked pointers are encoded in REL and RELA sections
-                stats.resolved_pointers += ofile_elf.rels.len() + ofile_elf.relas.len();
+        .map(|(_stem, (subpath, is_cfile))| -> Result<()> {
+            // Get the ELF representing the .o file resulting from this C or ASM object
+            // It should exist. Panic if it doesn't.
+            let ofile_path = format!("{}/{}.o", build_path, subpath);
+            let ofile_pathbuf = PathBuf::from(&ofile_path);
+            ensure!(
+                ofile_pathbuf.exists(),
+                format!("no such file or directory: {}", ofile_path)
+            );
+            let ofile_elf = ElfFile::from_path(&ofile_path)?;
+            // Properly-linked pointers are encoded in REL and RELA sections
+            stats.resolved_pointers += ofile_elf.rels.len() + ofile_elf.relas.len();
 
-                // Select syms that appear in the xmap file
-                let Some(xmapped_syms) = xmap.get(&(subpath.to_owned(), is_cfile)) else {
-                    return Ok(());
-                };
-                ofile_elf
-                    .symbols
-                    .iter()
-                    .map(|nsym| -> Result<(), Box<dyn Error>> {
-                        if nsym.sym.st_size != 0
-                            && let Some(rxsym) = xmapped_syms.get(&nsym.name)
-                            && (is_cfile || rxsym.section_name == nsym.name)
-                        {
-                            let counter = match (is_cfile, rxsym.is_code) {
-                                (true, true) => &mut stats.c_code_bytes,
-                                (true, false) => &mut stats.c_data_bytes,
-                                (false, true) => &mut stats.asm_code_bytes,
-                                (false, false) => &mut stats.asm_data_bytes,
-                            };
-                            *counter += rxsym.size;
-                            stats.hardcoded_pointers += count_hardcoded_pointers(
-                                &nsym,
-                                &ofile_elf,
-                                &elf_segment_bounds,
-                                &rxsym,
-                            )?;
-                        }
-                        Ok(())
-                    })
-                    .process_results(|iter| iter.collect_vec())?;
-                Ok(())
-            },
-        )
+            // Select syms that appear in the xmap file
+            let Some(xmapped_syms) = xmap.get(&(subpath.to_owned(), is_cfile)) else {
+                return Ok(());
+            };
+            ofile_elf
+                .symbols
+                .iter()
+                .map(|nsym| -> Result<()> {
+                    if nsym.sym.st_size != 0
+                        && let Some(rxsym) = xmapped_syms.get(&nsym.name)
+                        && (is_cfile || rxsym.section_name == nsym.name)
+                    {
+                        let counter = match (is_cfile, rxsym.is_code) {
+                            (true, true) => &mut stats.c_code_bytes,
+                            (true, false) => &mut stats.c_data_bytes,
+                            (false, true) => &mut stats.asm_code_bytes,
+                            (false, false) => &mut stats.asm_data_bytes,
+                        };
+                        *counter += rxsym.size;
+                        stats.hardcoded_pointers += count_hardcoded_pointers(
+                            &nsym,
+                            &ofile_elf,
+                            &elf_segment_bounds,
+                            &rxsym,
+                        )?;
+                    }
+                    Ok(())
+                })
+                .process_results(|iter| iter.collect_vec())?;
+            Ok(())
+        })
         .process_results(|iter| iter.collect_vec())?;
 
     Ok(stats)

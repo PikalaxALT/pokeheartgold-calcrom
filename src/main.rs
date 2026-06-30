@@ -1,9 +1,10 @@
 use crate::build_analyzer::Stats;
 use clap::Parser;
 use itertools::Itertools;
-use std::{error::Error, option::Option, vec::Vec};
+use std::{option::Option, vec::Vec};
 mod build_analyzer;
 mod source_mapper;
+use anyhow::Result;
 
 struct SimpleLogger;
 
@@ -122,7 +123,7 @@ struct RunPlan {
 }
 
 impl Args {
-    fn run(&self) -> Result<Vec<(String, Stats)>, Box<dyn Error>> {
+    fn run(&self) -> Result<Vec<(String, Stats)>> {
         Ok(std::iter::chain(
             self.buildnames.iter().flat_map(|buildname| {
                 self.arm9subdir.iter().map(|subdir| RunPlan {
@@ -137,7 +138,7 @@ impl Args {
                 elf_stem: self.arm7stem.to_owned(),
             }),
         )
-        .map(|plan| -> Result<(String, Stats), Box<dyn Error>> {
+        .map(|plan| -> Result<(String, Stats)> {
             // get_source_files is #[cached()] so it needs to own plan.basedir
             let source_map =
                 source_mapper::get_source_files(plan.basedir.to_owned(), plan.elf_stem.to_owned())?;
