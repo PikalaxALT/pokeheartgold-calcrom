@@ -72,7 +72,7 @@ impl ElfFile {
             .map(|shdr| -> Result<SectionHeaderWithData, elf::ParseError> {
                 Ok(SectionHeaderWithData {
                     shdr: shdr.to_owned(),
-                    data: elf_bytes.section_data(&shdr)?.0.to_vec(),
+                    data: elf_bytes.section_data(shdr)?.0.to_vec(),
                 })
             })
             .process_results(|iter| iter.collect_vec())?;
@@ -81,7 +81,7 @@ impl ElfFile {
             .get(&elf::abi::SHT_REL)
             .unwrap_or(&Vec::<&SectionHeader>::new())
             .iter()
-            .map(|shdr| elf_bytes.section_data_as_rels(&shdr))
+            .map(|shdr| elf_bytes.section_data_as_rels(shdr))
             .process_results(|iter| iter.collect_vec())?
             .into_iter()
             .flatten()
@@ -91,7 +91,7 @@ impl ElfFile {
             .get(&elf::abi::SHT_RELA)
             .unwrap_or(&Vec::<&SectionHeader>::new())
             .iter()
-            .map(|shdr| elf_bytes.section_data_as_relas(&shdr))
+            .map(|shdr| elf_bytes.section_data_as_relas(shdr))
             .process_results(|iter| iter.collect_vec())?
             .into_iter()
             .flatten()
@@ -103,7 +103,7 @@ impl ElfFile {
             .map(|sym| -> Result<NamedSymbol> {
                 Ok(NamedSymbol {
                     name: strtab.get(sym.st_name.try_into()?)?.to_string(),
-                    sym: sym,
+                    sym,
                 })
             })
             .process_results(|iter| iter.collect_vec())?;
@@ -112,8 +112,8 @@ impl ElfFile {
             sections: section_headers,
             segments: program_headers,
             symbols: syms,
-            rels: rels,
-            relas: relas,
+            rels,
+            relas,
         })
     }
 

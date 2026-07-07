@@ -86,7 +86,7 @@ fn report(
     total_label: &'static str,
     good_label: &'static str,
     bad_label: &'static str,
-) -> () {
+) {
     let total = good_ct + bad_ct;
     println!("  {} {}", total, total_label);
     if total != 0 {
@@ -106,7 +106,7 @@ fn report(
             bad_label,
             bad_d / total_d * 100.0
         );
-        println!(""); // An extra newline for good measure
+        println!(); // An extra newline for good measure
     }
 }
 
@@ -124,7 +124,7 @@ struct RunPlan {
 
 impl Args {
     fn run(&self) -> Result<Vec<(String, Stats)>> {
-        Ok(std::iter::chain(
+        std::iter::chain(
             self.buildnames.iter().flat_map(|buildname| {
                 self.arm9subdir.iter().map(|subdir| RunPlan {
                     basedir: std::format!("{}/{}", self.rootdir, subdir),
@@ -150,7 +150,7 @@ impl Args {
             )?;
             Ok((plan.buildname.unwrap_or(plan.elf_stem.to_string()), stats))
         })
-        .process_results(|iter| iter.collect_vec())?)
+        .process_results(|iter| iter.collect_vec())
     }
 }
 

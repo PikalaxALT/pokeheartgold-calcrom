@@ -10,7 +10,7 @@ pub fn get_source_files(dir: String, linkname: String) -> Result<HashMap<String,
     let lsf_file = format!("{}/{}.lsf", dir, linkname);
     std::fs::read_to_string(&lsf_file)?
         .lines()
-        .filter_map(|line| re.captures(&line))
+        .filter_map(|line| re.captures(line))
         .try_for_each(|m| {
             let source_o_path = format!("{}/{}", dir, &m[1]);
             let stem = source_o_path
@@ -26,7 +26,7 @@ pub fn get_source_files(dir: String, linkname: String) -> Result<HashMap<String,
             );
 
             ensure!(
-                !name_map.get(&stem).is_some_and(|(_, s)| *s != is_cfile),
+                name_map.get(&stem).is_none_or(|(_, s)| *s == is_cfile),
                 format!("{}.o has conflicting source file types", stem)
             );
 

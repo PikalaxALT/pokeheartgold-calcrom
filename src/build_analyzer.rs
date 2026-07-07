@@ -19,7 +19,7 @@ pub struct Stats {
     pub hardcoded_pointers: usize,
 }
 
-fn segments_to_ranges(program_headers: &Vec<ProgramHeader>) -> Vec<(u64, u64)> {
+fn segments_to_ranges(program_headers: &[ProgramHeader]) -> Vec<(u64, u64)> {
     // Build a Vec of (start, end) pairs
     let mut phdr_sorted = program_headers
         .iter()
@@ -56,7 +56,7 @@ fn segments_to_ranges(program_headers: &Vec<ProgramHeader>) -> Vec<(u64, u64)> {
 fn count_hardcoded_pointers(
     sym: &NamedSymbol,
     elf: &ElfFile,
-    phdr_ranges: &Vec<(u64, u64)>,
+    phdr_ranges: &[(u64, u64)],
     rxsym: &XmapSymbol,
 ) -> Result<usize> {
     let raw_data = elf.symbol_data(sym)?;
@@ -64,7 +64,7 @@ fn count_hardcoded_pointers(
     let num = raw_data
         .as_chunks::<4>()
         .0
-        .into_iter()
+        .iter()
         .enumerate()
         .map(|(idx, word_raw)| -> Result<(u64, u64)> {
             let my_word = u64::from(u32::from_le_bytes(word_raw.to_owned()));
@@ -147,8 +147,7 @@ pub fn analyze_build(
 
     // Count pointers and bytes coming from each source, stratified by C vs ASM and code vs data
     source_map
-        .to_owned()
-        .into_iter()
+        .iter()
         .map(|(_stem, (subpath, is_cfile))| -> Result<()> {
             // Get the ELF representing the .o file resulting from this C or ASM object
             // It should exist. Panic if it doesn't.
@@ -163,7 +162,7 @@ pub fn analyze_build(
             stats.resolved_pointers += ofile_elf.rels.len() + ofile_elf.relas.len();
 
             // Select syms that appear in the xmap file
-            let Some(xmapped_syms) = xmap.get(&(subpath.to_owned(), is_cfile)) else {
+            let Some(xmapped_syms) = xmap.get(&(subpath.to_owned(), *is_cfile)) else {
                 return Ok(());
             };
             ofile_elf
@@ -172,7 +171,7 @@ pub fn analyze_build(
                 .map(|nsym| -> Result<()> {
                     if nsym.sym.st_size != 0
                         && let Some(rxsym) = xmapped_syms.get(&nsym.name)
-                        && (is_cfile || rxsym.section_name == nsym.name)
+                        && (*is_cfile || rxsym.section_name == nsym.name)
                     {
                         let counter = match (is_cfile, rxsym.is_code) {
                             (true, true) => &mut stats.c_code_bytes,
@@ -181,12 +180,8 @@ pub fn analyze_build(
                             (false, false) => &mut stats.asm_data_bytes,
                         };
                         *counter += rxsym.size;
-                        stats.hardcoded_pointers += count_hardcoded_pointers(
-                            &nsym,
-                            &ofile_elf,
-                            &elf_segment_bounds,
-                            &rxsym,
-                        )?;
+                        stats.hardcoded_pointers +=
+                            count_hardcoded_pointers(nsym, &ofile_elf, &elf_segment_bounds, rxsym)?;
                     }
                     Ok(())
                 })
