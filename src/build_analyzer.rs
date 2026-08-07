@@ -3,7 +3,7 @@ use crate::build_analyzer::xmap_file::XmapSymbol;
 use crate::source_mapper::SourceMap;
 use elf::segment::ProgramHeader;
 use itertools::Itertools;
-use log::debug;
+use log::{debug, warn};
 use std::option::Option;
 use std::path::Path;
 mod elf_file;
@@ -146,7 +146,13 @@ pub fn analyze_build(
             debug!("subpath = {}", subpath.display());
             let mut ofile_path = build_path.join(subpath);
             ofile_path.add_extension("o");
-            let ofile_elf = ElfFile::from_path(&ofile_path)?;
+            let Ok(ofile_elf) = ElfFile::from_path(&ofile_path) else {
+                warn!(
+                    "Skipping .o file {}: no such file or directory",
+                    ofile_path.display()
+                );
+                return Ok(());
+            };
             // Properly-linked pointers are encoded in REL and RELA sections
             stats.resolved_pointers = stats
                 .resolved_pointers
