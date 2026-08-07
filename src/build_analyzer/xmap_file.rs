@@ -35,7 +35,7 @@ pub struct XmapSymbol {
 /// `stem`: The basename of the source file without its final extension
 /// `is_cfile`: true if the source file is decompiled C, false otherwise (extracted ASM)
 pub fn parse_xmap(path: &PathBuf, source_map: &SourceMap) -> Result<ParseXmapReturnType> {
-    debug!("path = {path:#?}");
+    debug!("path = {}", path.display());
     let pat = Regex::new(
         r"^\s*(?<addr>[0-9A-F]{8})\s+(?<size>[0-9A-F]{8})\s+(?<section>\S+)\s+(?<name>\S+)\t\((?<ofile>\S+)\.o\)$",
     )?;

@@ -40,7 +40,7 @@ pub fn get_source_files(dir: PathBuf, linkname: String) -> Result<SourceMap> {
             );
 
             let source_rel = source_o_path.strip_prefix(dir.clone())?;
-            debug!("source_rel = {source_rel:#?}");
+            debug!("source_rel = {}", source_rel.display());
             name_map.insert(stem, (source_rel.to_path_buf(), is_c_file));
 
             Ok(())

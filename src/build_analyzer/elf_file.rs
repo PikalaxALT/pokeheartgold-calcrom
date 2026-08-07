@@ -37,10 +37,10 @@ impl ElfFile {
     pub fn from_path(elf_path: &PathBuf) -> Result<Self> {
         // Load the ELF file into memory and assert that it is a 32-bit ARM elf.
         // Anything else is unsupported
-        debug!("elf_path = {elf_path:#?}");
+        debug!("elf_path = {}", elf_path.display());
         ensure!(
             elf_path.exists(),
-            format!("no such file or directory: {elf_path:#?}")
+            format!("no such file or directory: {}", elf_path.display())
         );
         let elf_data = std::fs::read(elf_path)?;
         let elf_bytes = ElfBytes::<LittleEndian>::minimal_parse(elf_data.as_slice())?;

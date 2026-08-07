@@ -58,3 +58,13 @@ cargo run --release -- \
   -7 sub \
   heartgold.us soulsilver.us
 ```
+
+## Version history
+
+### Unreleased
+
+Fix issues and panics when running in GitHub Actions
+
+### `0.1.0` - 2026-07-31
+
+Initial release

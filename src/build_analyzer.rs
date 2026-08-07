@@ -143,7 +143,7 @@ pub fn analyze_build(
         .map(|(_stem, (subpath, is_cfile))| -> Result<()> {
             // Get the ELF representing the .o file resulting from this C or ASM object
             // It should exist. Panic if it doesn't.
-            debug!("subpath = {subpath:#?}");
+            debug!("subpath = {}", subpath.display());
             let mut ofile_path = build_path.join(subpath);
             ofile_path.add_extension("o");
             let ofile_elf = ElfFile::from_path(&ofile_path)?;
