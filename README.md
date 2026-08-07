@@ -61,7 +61,7 @@ cargo run --release -- \
 
 ## Version history
 
-### Unreleased
+### `0.1.1` - 2026-08-07
 
 Fix issues and panics when running in GitHub Actions
 
