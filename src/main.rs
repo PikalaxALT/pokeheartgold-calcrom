@@ -1,10 +1,17 @@
 use crate::build_analyzer::Stats;
 use clap::Parser;
 use itertools::Itertools;
-use std::{option::Option, vec::Vec};
+use std::{
+    option::Option,
+    path::{Path, PathBuf},
+    process::exit,
+    vec::Vec,
+};
 mod build_analyzer;
 mod source_mapper;
 use anyhow::Result;
+use conv::ValueFrom;
+use log::debug;
 
 struct SimpleLogger;
 
@@ -57,11 +64,11 @@ struct Args {
 /// Print a report for the current segment
 ///
 /// Parameters:
-/// good_ct: The first number to print, representing the "good" outcome.
-/// bad_ct: The second number to print, representing the "bad" outcome.
-/// total_label: The string representing the label for the total count (good + bad).
-/// good_label: The string representing the label for the good count (good_ct).
-/// bad_label: The string representing the label for the bad count (bad_ct).
+/// `good_ct`: The first number to print, representing the "good" outcome.
+/// `bad_ct`: The second number to print, representing the "bad" outcome.
+/// `total_label`: The string representing the label for the total count (good + bad).
+/// `good_label`: The string representing the label for the good count (`good_ct`).
+/// `bad_label`: The string representing the label for the bad count (`bad_ct`).
 ///
 /// Note:
 /// This function will print the breakdown of good vs. bad, including a percent,
@@ -86,14 +93,14 @@ fn report(
     total_label: &'static str,
     good_label: &'static str,
     bad_label: &'static str,
-) {
-    let total = good_ct + bad_ct;
-    println!("  {} {}", total, total_label);
+) -> Result<()> {
+    let total = good_ct.saturating_add(bad_ct);
+    println!("  {total} {total_label}");
     if total != 0 {
         // Lossy conversion because we don't actually care about precision
-        let total_d = total as f64;
-        let good_d = good_ct as f64;
-        let bad_d = bad_ct as f64;
+        let total_d = f64::value_from(total)?;
+        let good_d = f64::value_from(good_ct)?;
+        let bad_d = f64::value_from(bad_ct)?;
         println!(
             "    {} {} ({:.2}%)",
             good_ct,
@@ -108,12 +115,13 @@ fn report(
         );
         println!(); // An extra newline for good measure
     }
+    Ok(())
 }
 
 /// Represents a build analysis spec
 struct RunPlan {
     /// The base directory containing the source code
-    basedir: String,
+    basedir: PathBuf,
 
     /// Optional, the subdir of `{basedir}/build` containing the build artifacts
     buildname: Option<String>,
@@ -124,31 +132,32 @@ struct RunPlan {
 
 impl Args {
     fn run(&self) -> Result<Vec<(String, Stats)>> {
+        debug!("{:#?}", self.rootdir);
         std::iter::chain(
             self.buildnames.iter().flat_map(|buildname| {
                 self.arm9subdir.iter().map(|subdir| RunPlan {
-                    basedir: std::format!("{}/{}", self.rootdir, subdir),
-                    buildname: Some(buildname.to_owned()),
-                    elf_stem: self.arm9stem.to_owned(),
+                    basedir: Path::new(&self.rootdir.clone()).join(subdir),
+                    buildname: Some(buildname.clone()),
+                    elf_stem: self.arm9stem.clone(),
                 })
             }),
             self.arm7subdir.iter().map(|subdir| RunPlan {
-                basedir: std::format!("{}/{}", self.rootdir, subdir),
+                basedir: Path::new(&self.rootdir.clone()).join(subdir),
                 buildname: None,
-                elf_stem: self.arm7stem.to_owned(),
+                elf_stem: self.arm7stem.clone(),
             }),
         )
         .map(|plan| -> Result<(String, Stats)> {
             // get_source_files is #[cached()] so it needs to own plan.basedir
             let source_map =
-                source_mapper::get_source_files(plan.basedir.to_owned(), plan.elf_stem.to_owned())?;
+                source_mapper::get_source_files(plan.basedir.clone(), plan.elf_stem.clone())?;
             let stats = build_analyzer::analyze_build(
                 &plan.basedir,
-                &plan.buildname,
+                plan.buildname.as_ref(),
                 &plan.elf_stem,
                 &source_map,
             )?;
-            Ok((plan.buildname.unwrap_or(plan.elf_stem.to_string()), stats))
+            Ok((plan.buildname.unwrap_or(plan.elf_stem), stats))
         })
         .process_results(|iter| iter.collect_vec())
     }
@@ -158,39 +167,58 @@ pub fn main() {
     // Initialize logging
     // Dev profile: DEBUG level
     // Release profile: INFO level
-    log::set_logger(&LOGGER)
-        .map(|()| log::set_max_level(log::LevelFilter::Debug))
-        .expect("log init failed");
+    log::set_logger(&LOGGER).map_or_else(
+        |err| {
+            eprintln!("log init failed: {err:#?}");
+            exit(1);
+        },
+        |()| log::set_max_level(log::LevelFilter::Debug),
+    );
 
     // Parse the commandline
     let args = Args::parse();
 
     // Do the work
-    let results = args.run().expect("processing error");
+    let results = args.run().unwrap_or_else(|err| {
+        eprintln!("processing error: {err:#?}");
+        exit(1);
+    });
 
     // Print the results on success
-    results.into_iter().for_each(|(buildname, stats)| {
-        println!("Analysis of {} binary:", buildname);
+    for (buildname, stats) in results {
+        println!("Analysis of {buildname} binary:");
         report(
             stats.c_code_bytes,
             stats.asm_code_bytes,
             "total bytes of code",
             "bytes of code in src",
             "bytes of code in asm",
-        );
+        )
+        .unwrap_or_else(|err| {
+            eprintln!("reporting error: {err:#?}");
+            exit(1);
+        });
         report(
             stats.c_data_bytes,
             stats.asm_data_bytes,
             "total bytes of data",
             "bytes of data in src",
             "bytes of data in asm",
-        );
+        )
+        .unwrap_or_else(|err| {
+            eprintln!("reporting error: {err:#?}");
+            exit(1);
+        });
         report(
             stats.resolved_pointers,
             stats.hardcoded_pointers,
             "total pointers",
             "properly-linked pointers",
             "hard-coded pointers",
-        );
-    });
+        )
+        .unwrap_or_else(|err| {
+            eprintln!("reporting error: {err:#?}");
+            exit(1);
+        });
+    }
 }

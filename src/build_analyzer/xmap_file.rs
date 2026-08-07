@@ -1,7 +1,8 @@
 use anyhow::Result;
 use itertools::Itertools;
+use log::debug;
 use regex::Regex;
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 type ParseXmapRegexType = Option<((String, bool), (String, XmapSymbol))>;
 type ParseXmapReturnType = HashMap<(String, bool), HashMap<String, XmapSymbol>>;
@@ -9,17 +10,8 @@ type ParseXmapReturnType = HashMap<(String, bool), HashMap<String, XmapSymbol>>;
 /// Returns Some(true) if the section is code, Some(false) if data, None if neither
 fn is_section_code(name: &str) -> Option<bool> {
     match name {
-        ".text" => Some(true),
-        ".init" => Some(true),
-        ".itcm" => Some(true),
-        ".sinit" => Some(true),
-        ".wram" => Some(true),
-        ".data" => Some(false),
-        ".rodata" => Some(false),
-        ".sdata" => Some(false),
-        ".dtcm" => Some(false),
-        ".exception" => Some(false),
-        ".version" => Some(false),
+        ".text" | ".init" | ".itcm" | ".sinit" | ".wram" => Some(true),
+        ".data" | ".rodata" | ".sdata" | ".dtcm" | ".exception" | ".version" => Some(false),
         _ => None,
     }
 }
@@ -37,13 +29,14 @@ pub struct XmapSymbol {
 }
 
 /// Parse an mwldarm .xMAP file.
-/// Returns a HashMap from (stem, is_cfile) to Vec<XmapSymbol>
-/// stem: The basename of the source file without its final extension
-/// is_cfile: true if the source file is decompiled C, false otherwise (extracted ASM)
+/// Returns a `HashMap` from (`stem`, `is_cfile`) to Vec<XmapSymbol>
+/// `stem`: The basename of the source file without its final extension
+/// `is_cfile`: true if the source file is decompiled C, false otherwise (extracted ASM)
 pub fn parse_xmap(
-    path: &String,
+    path: &PathBuf,
     source_map: &HashMap<String, (String, bool)>,
 ) -> Result<ParseXmapReturnType> {
+    debug!("path = {path:#?}");
     let pat = Regex::new(
         r"^\s*(?<addr>[0-9A-F]{8})\s+(?<size>[0-9A-F]{8})\s+(?<section>\S+)\s+(?<name>\S+)\t\((?<ofile>\S+)\.o\)$",
     )?;

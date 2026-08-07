@@ -8,6 +8,7 @@ use elf::{
     symbol::Symbol,
 };
 use itertools::Itertools;
+use log::debug;
 use std::{path::PathBuf, vec::Vec};
 
 /// A wrapper struct that associates an Elf section with its data
@@ -33,10 +34,14 @@ pub struct ElfFile {
 }
 
 impl ElfFile {
-    pub fn from_path(elf_name: &String) -> Result<ElfFile> {
+    pub fn from_path(elf_path: &PathBuf) -> Result<Self> {
         // Load the ELF file into memory and assert that it is a 32-bit ARM elf.
         // Anything else is unsupported
-        let elf_path = PathBuf::from(elf_name);
+        debug!("elf_path = {elf_path:#?}");
+        ensure!(
+            elf_path.exists(),
+            format!("no such file or directory: {elf_path:#?}")
+        );
         let elf_data = std::fs::read(elf_path)?;
         let elf_bytes = ElfBytes::<LittleEndian>::minimal_parse(elf_data.as_slice())?;
         ensure!(
@@ -51,17 +56,13 @@ impl ElfFile {
 
         // read tables
         // Get the program headers for the load offsets and sizes
-        let program_headers = elf_bytes
-            .segments()
-            .into_iter()
-            .flat_map(|t| t.into_iter())
-            .collect_vec();
+        let program_headers = elf_bytes.segments().into_iter().flatten().collect_vec();
 
         // Get the section headers and strtab to find the code/data in the final ROM
         let section_headers_raw = elf_bytes
             .section_headers()
             .into_iter()
-            .flat_map(|s| s.into_iter())
+            .flatten()
             .collect_vec();
         let section_headers_by_type = section_headers_raw
             .iter()
@@ -87,7 +88,8 @@ impl ElfFile {
             .flatten()
             .collect_vec();
 
-        let relas = section_headers_by_type
+        #[allow(clippy::similar_names)]
+        let addend_rels = section_headers_by_type
             .get(&elf::abi::SHT_RELA)
             .unwrap_or(&Vec::<&SectionHeader>::new())
             .iter()
@@ -108,12 +110,12 @@ impl ElfFile {
             })
             .process_results(|iter| iter.collect_vec())?;
 
-        Ok(ElfFile {
+        Ok(Self {
             sections: section_headers,
             segments: program_headers,
             symbols: syms,
             rels,
-            relas,
+            relas: addend_rels,
         })
     }
 
@@ -122,9 +124,13 @@ impl ElfFile {
             .sections
             .get(usize::from(sym.sym.st_shndx))
             .context("unrecognized section")?;
-        let start = sym.sym.st_value - shdr.shdr.sh_addr;
-        let end = start + sym.sym.st_size;
-        let result = shdr.data[usize::try_from(start)?..usize::try_from(end)?].to_vec();
+        let start = sym.sym.st_value.saturating_sub(shdr.shdr.sh_addr);
+        let end = start.saturating_add(sym.sym.st_size);
+        let result = shdr
+            .data
+            .get(usize::try_from(start)?..usize::try_from(end)?)
+            .context("bad slice")?
+            .to_vec();
         Ok(result)
     }
 }

@@ -2,11 +2,12 @@ use crate::build_analyzer::elf_file::{ElfFile, NamedSymbol};
 use crate::build_analyzer::xmap_file::XmapSymbol;
 use elf::segment::ProgramHeader;
 use itertools::Itertools;
-use log::*;
-use std::{collections::HashMap, option::Option, path::PathBuf};
+use log::debug;
+use std::path::Path;
+use std::{collections::HashMap, option::Option};
 mod elf_file;
 mod xmap_file;
-use anyhow::{Result, ensure};
+use anyhow::Result;
 
 /// Collects statistics about the decompilation effort based on the build outputs
 #[derive(Default)]
@@ -23,14 +24,14 @@ fn segments_to_ranges(program_headers: &[ProgramHeader]) -> Vec<(u64, u64)> {
     // Build a Vec of (start, end) pairs
     let mut phdr_sorted = program_headers
         .iter()
-        .map(|phdr| (phdr.p_vaddr, phdr.p_vaddr + phdr.p_memsz))
+        .map(|phdr| (phdr.p_vaddr, phdr.p_vaddr.saturating_add(phdr.p_memsz)))
         .collect_vec();
 
     // Merge overlapping ranges
     // Sort by start address
-    phdr_sorted.sort();
+    phdr_sorted.sort_unstable();
     let mut phdr_ranges = Vec::<(u64, u64)>::new();
-    phdr_sorted.into_iter().for_each(|(start, end)| {
+    for (start, end) in phdr_sorted {
         if let Some((_, lmend)) = phdr_ranges.last_mut()
             && *lmend >= start
         {
@@ -38,7 +39,7 @@ fn segments_to_ranges(program_headers: &[ProgramHeader]) -> Vec<(u64, u64)> {
         } else {
             phdr_ranges.push((start, end));
         }
-    });
+    }
 
     debug!(
         target: "phdr collapse",
@@ -68,20 +69,19 @@ fn count_hardcoded_pointers(
         .enumerate()
         .map(|(idx, word_raw)| -> Result<(u64, u64)> {
             let my_word = u64::from(u32::from_le_bytes(word_raw.to_owned()));
-            let my_addr = rxsym.addr + 4 * u64::try_from(idx)?;
+            let (my_addr, _) = u64::try_from(idx)?.carrying_mul_add(4, 0, rxsym.addr);
             Ok((my_addr, my_word))
         })
         .process_results(|iter| iter.collect_vec())?
         .into_iter()
         .filter(|(_, my_word)| {
-            *my_word >= 0x01000000u64
+            *my_word >= 0x0100_0000_u64
                 && phdr_ranges
                     .iter()
-                    .find(|region| region.0 <= *my_word && *my_word < region.1)
-                    .is_some()
+                    .any(|region| region.0 <= *my_word && *my_word < region.1)
         })
         .inspect(|(my_addr, my_word)| {
-            debug!("hardcoded pointer at 0x{my_addr:08X} --> 0x{my_word:08X}")
+            debug!("hardcoded pointer at 0x{my_addr:08X} --> 0x{my_word:08X}");
         })
         .count();
     Ok(num)
@@ -114,34 +114,25 @@ fn count_hardcoded_pointers(
 }
 
 pub fn analyze_build(
-    basedir: &String,
-    buildname: &Option<String>,
+    basedir: &Path,
+    buildname: Option<&String>,
     name: &String,
     source_map: &HashMap<String, (String, bool)>,
 ) -> Result<Stats> {
-    debug!(
-        "Analyzing build of {}",
-        buildname.to_owned().unwrap_or(name.to_owned())
-    );
+    debug!("Analyzing build of {}", buildname.unwrap_or(name));
     let mut stats = Stats::default();
 
-    let build_path = [
-        Some(basedir),
-        Some(&String::from("build")),
-        buildname.as_ref(),
-    ]
-    .iter()
-    .filter_map(|x| x.to_owned())
-    .map(|x| x.to_owned())
-    .collect_vec()
-    .join("/");
+    let mut build_path = basedir.join("build");
+    if let Some(buildname_s) = buildname {
+        build_path = build_path.join(buildname_s);
+    }
 
     // Load the xMAP file
-    let xmap_name = std::format!("{}/{}.elf.xMAP", build_path, name);
+    let xmap_name = build_path.join(format!("{name}.elf.xMAP"));
     let xmap = xmap_file::parse_xmap(&xmap_name, source_map)?;
 
     // Read the ELF file into memory and make sure it does in fact represent an NDS binary
-    let elf_name = std::format!("{}/{}.elf", build_path, name);
+    let elf_name = build_path.join(format!("{name}.elf"));
     let elf_file = ElfFile::from_path(&elf_name)?;
     let elf_segment_bounds = segments_to_ranges(&elf_file.segments);
 
@@ -151,15 +142,14 @@ pub fn analyze_build(
         .map(|(_stem, (subpath, is_cfile))| -> Result<()> {
             // Get the ELF representing the .o file resulting from this C or ASM object
             // It should exist. Panic if it doesn't.
-            let ofile_path = format!("{}/{}.o", build_path, subpath);
-            let ofile_pathbuf = PathBuf::from(&ofile_path);
-            ensure!(
-                ofile_pathbuf.exists(),
-                format!("no such file or directory: {}", ofile_path)
-            );
+            debug!("subpath = {subpath}");
+            let ofile_path = build_path.join(format!("{subpath}.o"));
             let ofile_elf = ElfFile::from_path(&ofile_path)?;
             // Properly-linked pointers are encoded in REL and RELA sections
-            stats.resolved_pointers += ofile_elf.rels.len() + ofile_elf.relas.len();
+            stats.resolved_pointers = stats
+                .resolved_pointers
+                .saturating_add(ofile_elf.rels.len())
+                .saturating_add(ofile_elf.relas.len());
 
             // Select syms that appear in the xmap file
             let Some(xmapped_syms) = xmap.get(&(subpath.to_owned(), *is_cfile)) else {
@@ -179,9 +169,16 @@ pub fn analyze_build(
                             (false, true) => &mut stats.asm_code_bytes,
                             (false, false) => &mut stats.asm_data_bytes,
                         };
-                        *counter += rxsym.size;
-                        stats.hardcoded_pointers +=
-                            count_hardcoded_pointers(nsym, &ofile_elf, &elf_segment_bounds, rxsym)?;
+                        *counter = counter.saturating_add(rxsym.size);
+                        stats.hardcoded_pointers =
+                            stats
+                                .hardcoded_pointers
+                                .saturating_add(count_hardcoded_pointers(
+                                    nsym,
+                                    &ofile_elf,
+                                    &elf_segment_bounds,
+                                    rxsym,
+                                )?);
                     }
                     Ok(())
                 })
