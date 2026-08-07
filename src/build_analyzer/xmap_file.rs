@@ -4,8 +4,10 @@ use log::debug;
 use regex::Regex;
 use std::{collections::HashMap, path::PathBuf};
 
-type ParseXmapRegexType = Option<((String, bool), (String, XmapSymbol))>;
-type ParseXmapReturnType = HashMap<(String, bool), HashMap<String, XmapSymbol>>;
+use crate::source_mapper::SourceMap;
+
+type ParseXmapRegexType = Option<((PathBuf, bool), (String, XmapSymbol))>;
+type ParseXmapReturnType = HashMap<(PathBuf, bool), HashMap<String, XmapSymbol>>;
 
 /// Returns Some(true) if the section is code, Some(false) if data, None if neither
 fn is_section_code(name: &str) -> Option<bool> {
@@ -32,10 +34,7 @@ pub struct XmapSymbol {
 /// Returns a `HashMap` from (`stem`, `is_cfile`) to Vec<XmapSymbol>
 /// `stem`: The basename of the source file without its final extension
 /// `is_cfile`: true if the source file is decompiled C, false otherwise (extracted ASM)
-pub fn parse_xmap(
-    path: &PathBuf,
-    source_map: &HashMap<String, (String, bool)>,
-) -> Result<ParseXmapReturnType> {
+pub fn parse_xmap(path: &PathBuf, source_map: &SourceMap) -> Result<ParseXmapReturnType> {
     debug!("path = {path:#?}");
     let pat = Regex::new(
         r"^\s*(?<addr>[0-9A-F]{8})\s+(?<size>[0-9A-F]{8})\s+(?<section>\S+)\s+(?<name>\S+)\t\((?<ofile>\S+)\.o\)$",

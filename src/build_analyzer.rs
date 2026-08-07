@@ -1,10 +1,11 @@
 use crate::build_analyzer::elf_file::{ElfFile, NamedSymbol};
 use crate::build_analyzer::xmap_file::XmapSymbol;
+use crate::source_mapper::SourceMap;
 use elf::segment::ProgramHeader;
 use itertools::Itertools;
 use log::debug;
+use std::option::Option;
 use std::path::Path;
-use std::{collections::HashMap, option::Option};
 mod elf_file;
 mod xmap_file;
 use anyhow::Result;
@@ -117,7 +118,7 @@ pub fn analyze_build(
     basedir: &Path,
     buildname: Option<&String>,
     name: &String,
-    source_map: &HashMap<String, (String, bool)>,
+    source_map: &SourceMap,
 ) -> Result<Stats> {
     debug!("Analyzing build of {}", buildname.unwrap_or(name));
     let mut stats = Stats::default();
@@ -142,8 +143,9 @@ pub fn analyze_build(
         .map(|(_stem, (subpath, is_cfile))| -> Result<()> {
             // Get the ELF representing the .o file resulting from this C or ASM object
             // It should exist. Panic if it doesn't.
-            debug!("subpath = {subpath}");
-            let ofile_path = build_path.join(format!("{subpath}.o"));
+            debug!("subpath = {subpath:#?}");
+            let mut ofile_path = build_path.join(subpath);
+            ofile_path.add_extension("o");
             let ofile_elf = ElfFile::from_path(&ofile_path)?;
             // Properly-linked pointers are encoded in REL and RELA sections
             stats.resolved_pointers = stats
