@@ -61,6 +61,10 @@ cargo run --release -- \
 
 ## Version history
 
+### `0.1.2` - 2026-08-08
+
+Fix mishandling of filenames with dots in the middle
+
 ### `0.1.1` - 2026-08-07
 
 Fix issues and panics when running in GitHub Actions
