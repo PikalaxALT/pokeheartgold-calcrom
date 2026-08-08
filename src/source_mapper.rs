@@ -22,21 +22,22 @@ pub fn get_source_files(dir: PathBuf, linkname: String) -> Result<SourceMap> {
         .try_for_each(|m| {
             let source_o_path = dir.clone().join(&m[1]);
             let stem = source_o_path
-                .file_stem()
-                .context("no filename stem")?
-                .to_str()
-                .context("conversion failed")?
-                .to_string();
+                .file_name()
+                .map(|stem_os| stem_os.to_str())
+                .flatten()
+                .map(|stem_str| stem_str.to_string())
+                .context("unable to get file stem")?;
+            debug!("stem = {stem}");
             let is_c_file = file_with_extension_exists(source_o_path.clone(), "c");
             let is_asm_file = file_with_extension_exists(source_o_path.clone(), "s");
             ensure!(
                 !is_c_file || !is_asm_file,
-                format!("{stem}.o has both C and ASM files in the same directory")
+                format!("{stem:#?}.o has both C and ASM files in the same directory")
             );
 
             ensure!(
                 name_map.get(&stem).is_none_or(|(_, s)| *s == is_c_file),
-                format!("{stem}.o has conflicting source file types")
+                format!("{stem:#?}.o has conflicting source file types")
             );
 
             let source_rel = source_o_path.strip_prefix(dir.clone())?;

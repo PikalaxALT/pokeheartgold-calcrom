@@ -1,5 +1,5 @@
 use crate::build_analyzer::elf_file::{ElfFile, NamedSymbol};
-use crate::build_analyzer::xmap_file::XmapSymbol;
+use crate::build_analyzer::xmap_file::{SectionType, XmapSymbol};
 use crate::source_mapper::SourceMap;
 use elf::segment::ProgramHeader;
 use itertools::Itertools;
@@ -153,6 +153,7 @@ pub fn analyze_build(
                 );
                 return Ok(());
             };
+            debug!("processing object file {}", ofile_path.display());
             // Properly-linked pointers are encoded in REL and RELA sections
             stats.resolved_pointers = stats
                 .resolved_pointers
@@ -161,22 +162,31 @@ pub fn analyze_build(
 
             // Select syms that appear in the xmap file
             let Some(xmapped_syms) = xmap.get(&(subpath.to_owned(), *is_cfile)) else {
+                warn!("object file {} not found in xmap", ofile_path.display());
                 return Ok(());
             };
             ofile_elf
                 .symbols
                 .iter()
+                .inspect(|nsym| debug!("{nsym:#?}"))
                 .map(|nsym| -> Result<()> {
                     if nsym.sym.st_size != 0
                         && let Some(rxsym) = xmapped_syms.get(&nsym.name)
                         && (*is_cfile || rxsym.section_name == nsym.name)
+                        && let Some(counter) = match (is_cfile, &rxsym.section_type) {
+                            (true, SectionType::Code) => Some(&mut stats.c_code_bytes),
+                            (true, SectionType::Data) => Some(&mut stats.c_data_bytes),
+                            (false, SectionType::Code) => Some(&mut stats.asm_code_bytes),
+                            (false, SectionType::Data) => Some(&mut stats.asm_data_bytes),
+                            _ => {
+                                debug!(
+                                    "Not counting symbol {} in section {} of type {}, size = {}",
+                                    nsym.name, rxsym.section_name, rxsym.section_type, rxsym.size
+                                );
+                                None
+                            }
+                        }
                     {
-                        let counter = match (is_cfile, rxsym.is_code) {
-                            (true, true) => &mut stats.c_code_bytes,
-                            (true, false) => &mut stats.c_data_bytes,
-                            (false, true) => &mut stats.asm_code_bytes,
-                            (false, false) => &mut stats.asm_data_bytes,
-                        };
                         *counter = counter.saturating_add(rxsym.size);
                         stats.hardcoded_pointers =
                             stats
@@ -203,7 +213,7 @@ mod testing {
     use super::count_hardcoded_pointers;
     use crate::build_analyzer::{
         elf_file::{ElfFile, NamedSymbol, SectionHeaderWithData},
-        xmap_file::XmapSymbol,
+        xmap_file::{SectionType, XmapSymbol},
     };
     use elf::{section::SectionHeader, symbol::Symbol};
 
@@ -222,7 +232,7 @@ mod testing {
         };
         let rxsym = XmapSymbol {
             section_name: ".rodata".into(),
-            is_code: false,
+            section_type: SectionType::Data,
             size: 8,
             #[cfg(debug_assertions)]
             addr: 0x02000000,

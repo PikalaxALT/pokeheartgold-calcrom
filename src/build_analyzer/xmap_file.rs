@@ -1,20 +1,45 @@
 use anyhow::Result;
 use itertools::Itertools;
-use log::debug;
+use log::{debug, warn};
 use regex::Regex;
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::source_mapper::SourceMap;
 
-type ParseXmapRegexType = Option<((PathBuf, bool), (String, XmapSymbol))>;
-type ParseXmapReturnType = HashMap<(PathBuf, bool), HashMap<String, XmapSymbol>>;
+pub enum SectionType {
+    Code,
+    Data,
+    NoLoad,
+    Unknown,
+}
 
-/// Returns Some(true) if the section is code, Some(false) if data, None if neither
-fn is_section_code(name: &str) -> Option<bool> {
-    match name {
-        ".text" | ".init" | ".itcm" | ".sinit" | ".wram" => Some(true),
-        ".data" | ".rodata" | ".sdata" | ".dtcm" | ".exception" | ".version" => Some(false),
-        _ => None,
+impl SectionType {
+    /// Returns Some(true) if the section is code, Some(false) if data, None if neither
+    fn from_name(name: &str) -> Self {
+        match name {
+            ".text" | ".init" | ".itcm" | ".sinit" | ".wram" => Self::Code,
+            ".data" | ".rodata" | ".sdata" | ".dtcm" | ".exception" | ".version" => Self::Data,
+            ".bss" | ".dtcm.bss" => Self::NoLoad,
+            _ => {
+                warn!("ignoring unmapped section: {name}");
+                Self::Unknown
+            }
+        }
+    }
+
+    fn to_str(&self) -> &str {
+        match self {
+            Self::Code => "code",
+            Self::Data => "data",
+            Self::NoLoad => "noload",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl std::fmt::Display for SectionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.to_str())
     }
 }
 
@@ -22,13 +47,16 @@ pub struct XmapSymbol {
     /// Name of the ELF section this symbol was placed in
     pub section_name: String,
     /// true if the symbol is from a code section, false otherwise
-    pub is_code: bool,
+    pub section_type: SectionType,
     /// Size of the symbol, in bytes
     pub size: usize,
     #[cfg(debug_assertions)]
     /// Runtime address of the symbol
     pub addr: u64,
 }
+
+type ParseXmapRegexType = Option<((PathBuf, bool), (String, XmapSymbol))>;
+type ParseXmapReturnType = HashMap<(PathBuf, bool), HashMap<String, XmapSymbol>>;
 
 /// Parse an mwldarm .xMAP file.
 /// Returns a `HashMap` from (`stem`, `is_cfile`) to Vec<XmapSymbol>
@@ -57,19 +85,19 @@ pub fn parse_xmap(path: &PathBuf, source_map: &SourceMap) -> Result<ParseXmapRet
             };
 
             // Get the section type
-            let Some(is_text) = is_section_code(&caps["section"]) else {
-                return Ok(None);
-            };
+            let section_type = SectionType::from_name(&caps["section"]);
 
             // Get file data
             let key = (ofile_name.to_owned(), is_cfile.to_owned());
+            let section_name = caps["section"].to_string();
+            let symbol_name = caps["name"].to_string();
             Ok(Some((
                 key,
                 (
-                    caps["name"].to_string(),
+                    symbol_name,
                     XmapSymbol {
-                        section_name: caps["section"].to_string(),
-                        is_code: is_text,
+                        section_name,
+                        section_type,
                         size,
                         #[cfg(debug_assertions)]
                         addr: u64::from_str_radix(&caps["addr"], 16)?,

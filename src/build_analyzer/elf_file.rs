@@ -12,12 +12,14 @@ use log::debug;
 use std::{path::PathBuf, vec::Vec};
 
 /// A wrapper struct that associates an Elf section with its data
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionHeaderWithData {
     pub shdr: SectionHeader,
     pub data: Vec<u8>,
 }
 
 /// A wrapper struct that associates an Elf symbol with its name
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamedSymbol {
     pub sym: Symbol,
     pub name: String,
@@ -25,6 +27,7 @@ pub struct NamedSymbol {
 
 /// A wrapper struct representing a parsed ELF.
 /// Contains sections, segments, symbols, and relocations with and without addend.
+#[derive(Debug, Clone)]
 pub struct ElfFile {
     pub sections: Vec<SectionHeaderWithData>,
     pub segments: Vec<ProgramHeader>,
