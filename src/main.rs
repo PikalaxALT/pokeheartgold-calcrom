@@ -8,7 +8,6 @@ use std::{
     vec::Vec,
 };
 mod build_analyzer;
-mod source_mapper;
 use anyhow::Result;
 use conv::ValueFrom;
 use log::debug;
@@ -148,14 +147,10 @@ impl Args {
             }),
         )
         .map(|plan| -> Result<(String, Stats)> {
-            // get_source_files is #[cached()] so it needs to own plan.basedir
-            let source_map =
-                source_mapper::get_source_files(plan.basedir.clone(), plan.elf_stem.clone())?;
             let stats = build_analyzer::analyze_build(
                 &plan.basedir,
                 plan.buildname.as_ref(),
                 &plan.elf_stem,
-                &source_map,
             )?;
             Ok((plan.buildname.unwrap_or(plan.elf_stem), stats))
         })

@@ -1,6 +1,5 @@
 use crate::build_analyzer::elf_file::{ElfFile, NamedSymbol};
 use crate::build_analyzer::xmap_file::{SectionType, XmapSymbol};
-use crate::source_mapper::SourceMap;
 use elf::segment::ProgramHeader;
 use itertools::Itertools;
 use log::{debug, warn};
@@ -114,12 +113,7 @@ fn count_hardcoded_pointers(
     Ok(num)
 }
 
-pub fn analyze_build(
-    basedir: &Path,
-    buildname: Option<&String>,
-    name: &String,
-    source_map: &SourceMap,
-) -> Result<Stats> {
+pub fn analyze_build(basedir: &Path, buildname: Option<&String>, name: &String) -> Result<Stats> {
     debug!("Analyzing build of {}", buildname.unwrap_or(name));
     let mut stats = Stats::default();
 
@@ -129,23 +123,21 @@ pub fn analyze_build(
     }
 
     // Load the xMAP file
-    let xmap_name = build_path.join(format!("{name}.elf.xMAP"));
-    let xmap = xmap_file::parse_xmap(&xmap_name, source_map)?;
+    let xmap_name = build_path.join(format!("{name}.nef.xMAP"));
+    let xmap = xmap_file::parse_xmap(&xmap_name)?;
 
     // Read the ELF file into memory and make sure it does in fact represent an NDS binary
-    let elf_name = build_path.join(format!("{name}.elf"));
+    let elf_name = build_path.join(format!("{name}.nef"));
     let elf_file = ElfFile::from_path(&elf_name)?;
     let elf_segment_bounds = segments_to_ranges(&elf_file.segments);
 
     // Count pointers and bytes coming from each source, stratified by C vs ASM and code vs data
-    source_map
-        .iter()
-        .map(|(_stem, (subpath, is_cfile))| -> Result<()> {
+    xmap.iter()
+        .map(|((subpath, is_cfile), xmapped_syms)| -> Result<()> {
             // Get the ELF representing the .o file resulting from this C or ASM object
             // It should exist. Panic if it doesn't.
             debug!("subpath = {}", subpath.display());
-            let mut ofile_path = build_path.join(subpath);
-            ofile_path.add_extension("o");
+            let ofile_path = build_path.join(format!("{name}.nef.p")).join(subpath);
             let Ok(ofile_elf) = ElfFile::from_path(&ofile_path) else {
                 warn!(
                     "Skipping .o file {}: no such file or directory",
@@ -160,11 +152,6 @@ pub fn analyze_build(
                 .saturating_add(ofile_elf.rels.len())
                 .saturating_add(ofile_elf.relas.len());
 
-            // Select syms that appear in the xmap file
-            let Some(xmapped_syms) = xmap.get(&(subpath.to_owned(), *is_cfile)) else {
-                warn!("object file {} not found in xmap", ofile_path.display());
-                return Ok(());
-            };
             ofile_elf
                 .symbols
                 .iter()

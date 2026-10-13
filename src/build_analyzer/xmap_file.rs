@@ -1,10 +1,8 @@
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use itertools::Itertools;
 use log::{debug, warn};
 use regex::Regex;
 use std::{collections::HashMap, path::PathBuf};
-
-use crate::source_mapper::SourceMap;
 
 pub enum SectionType {
     Code,
@@ -62,10 +60,10 @@ type ParseXmapReturnType = HashMap<(PathBuf, bool), HashMap<String, XmapSymbol>>
 /// Returns a `HashMap` from (`stem`, `is_cfile`) to Vec<XmapSymbol>
 /// `stem`: The basename of the source file without its final extension
 /// `is_cfile`: true if the source file is decompiled C, false otherwise (extracted ASM)
-pub fn parse_xmap(path: &PathBuf, source_map: &SourceMap) -> Result<ParseXmapReturnType> {
+pub fn parse_xmap(path: &PathBuf) -> Result<ParseXmapReturnType> {
     debug!("path = {}", path.display());
     let pat = Regex::new(
-        r"^\s*(?<addr>[0-9A-F]{8})\s+(?<size>[0-9A-F]{8})\s+(?<section>\S+)\s+(?<name>\S+)\t\((?<ofile>\S+)\.o\)$",
+        r"^\s*(?<addr>[0-9A-F]{8})\s+(?<size>[0-9A-F]{8})\s+(?<section>\S+)\s+(?<name>\S+)\t\((?<ofile>\S+\.o)\)$",
     )?;
 
     let result = std::fs::read_to_string(path)?
@@ -80,15 +78,18 @@ pub fn parse_xmap(path: &PathBuf, source_map: &SourceMap) -> Result<ParseXmapRet
 
             // Get the source file name (stem)
             let name = String::from(&caps["ofile"]);
-            let Some((ofile_name, is_cfile)) = source_map.get(&name) else {
-                return Ok(None);
-            };
+            let is_cfile = name.ends_with(".c.o");
+            let is_asmfile = name.ends_with(".s.o");
+            ensure!(
+                is_cfile ^ is_asmfile,
+                format!("{name} should be either C or ASM, not both nor neither")
+            );
 
             // Get the section type
             let section_type = SectionType::from_name(&caps["section"]);
 
             // Get file data
-            let key = (ofile_name.to_owned(), is_cfile.to_owned());
+            let key = (PathBuf::from(name), is_cfile.clone());
             let section_name = caps["section"].to_string();
             let symbol_name = caps["name"].to_string();
             Ok(Some((
